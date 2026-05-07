@@ -1,0 +1,3187 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fugu overlay — Valorant (sc0rpio74890 + commandes chat)</title>
+    <style>
+        @font-face {
+            font-family: 'Sea Regular Fugu';
+            src: url('https://raw.githubusercontent.com/scorpio74890-alt/test-twitch/main/police/sea-regular-fugu.otf') format('opentype'),
+                 url('../../police/sea-regular-fugu.otf') format('opentype');
+            font-weight: normal;
+            font-style: normal;
+            font-display: swap;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Sea Regular Fugu', 'Arial', sans-serif;
+            background: transparent;
+            color: #fff;
+            overflow: hidden;
+            min-height: 100vh;
+        }
+
+        /* Full-width trapezoid: flipped vs earlier — narrow along top (slant top-right → bottom-right), wide bottom */
+        .fugu-overlay {
+            width: 100%;
+            transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        .fugu-overlay.fugu-overlay--offscreen {
+            transform: translate3d(-105%, 0, 0);
+            pointer-events: none;
+        }
+
+        .fugu-trapezoid {
+            width: 100%;
+            /*
+             * Biseau droit avec course horizontale fixe (px), pas en % de la largeur :
+             * l’angle du bord reste le même quand la largeur de l’overlay (OBS, fenêtre) change.
+             * 44px ≈ 2.5 % sur ~1760px — proche de l’ancien rendu en plein écran.
+             */
+            --fugu-trapezoid-slant: 44px;
+            clip-path: polygon(
+                0 0,
+                max(0px, calc(100% - var(--fugu-trapezoid-slant))) 0,
+                100% 100%,
+                0 100%
+            );
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.55);
+            background: linear-gradient(
+                195deg,
+                rgba(14, 18, 28, 0.9) 0%,
+                rgba(18, 22, 35, 0.83) 40%,
+                rgba(12, 14, 22, 0.94) 100%
+            );
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            animation: trapezoidReveal 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+            opacity: 0;
+        }
+
+        .fugu-trapezoid.fugu-trapezoid--lol {
+            background: linear-gradient(
+                195deg,
+                rgba(8, 18, 42, 0.92) 0%,
+                rgba(12, 28, 55, 0.86) 45%,
+                rgba(6, 14, 32, 0.95) 100%
+            );
+        }
+
+        @keyframes trapezoidReveal {
+            from {
+                opacity: 0;
+                transform: translateY(12px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .fugu-overlay--awaiting-data .fugu-cards,
+        .fugu-overlay--awaiting-data .fugu-rank {
+            visibility: hidden;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .fugu-inner {
+            display: flex;
+            flex-direction: row;
+            align-items: stretch;
+            gap: clamp(12px, 2vw, 28px);
+            /* Extra inline-end padding so rank clears the top-right clip taper */
+            padding: clamp(14px, 2.2vh, 22px) clamp(28px, 6vw, 88px) clamp(14px, 2.2vh, 22px)
+                clamp(16px, 3vw, 28px);
+            min-height: clamp(100px, 14vh, 160px);
+        }
+
+        /* One flex slot: Valorant and LoL each have their own card row (no shared DOM → no cross-game bleed). */
+        .fugu-history-stack {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #fuguOverlayRoot[data-game='valorant'] .fugu-cards--lol,
+        #fuguOverlayRoot[data-game='lol'] .fugu-cards--valo {
+            display: none !important;
+        }
+
+        /* ?mode=rank — rang seul, pas de piste d’historique. */
+        .fugu-overlay--rank-only .fugu-history-stack {
+            display: none !important;
+        }
+
+        /* Même emplacement qu’avec l’historique : le bloc rang reste au bord droit du trapèze. */
+        .fugu-overlay--rank-only .fugu-inner {
+            justify-content: flex-end;
+        }
+
+        .fugu-overlay--rank-only .fugu-rank {
+            border-left: none;
+            padding-left: 0;
+        }
+
+        /* —— Rank block (right side; icon flush to outer edge) —— */
+        .fugu-rank {
+            flex: 0 0 auto;
+            display: flex;
+            flex-direction: row-reverse;
+            align-items: center;
+            gap: 14px;
+            padding-left: clamp(8px, 1.5vw, 20px);
+            /* Air à droite (icône côté bord du trapèze) */
+            padding-right: clamp(10px, 1.4vw, 20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.08);
+            animation: rankSlideIn 0.75s 0.15s cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+
+        @keyframes rankSlideIn {
+            from {
+                opacity: 0;
+                transform: translateX(18px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .fugu-rank__meta {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 0;
+            text-align: right;
+        }
+
+        .fugu-rank__icon-wrap {
+            position: relative;
+            width: clamp(60px, 7.6vw, 82px);
+            height: clamp(60px, 7.6vw, 82px);
+            display: grid;
+            place-items: center;
+            transform-origin: center center;
+        }
+
+        .fugu-rank__icon-wrap::after {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            border-radius: 12px;
+            opacity: 0.35;
+            pointer-events: none;
+        }
+
+        /* Class hooks for prod. Two stacked imgs (Valo / LoL); data-game picks which is visible. */
+        .fugu-rank__icon {
+            grid-area: 1 / 1;
+            z-index: 1;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.4));
+        }
+
+        #fuguOverlayRoot[data-game='valorant'] .fugu-rank__icon--lol,
+        #fuguOverlayRoot[data-game='lol'] .fugu-rank__icon--valo {
+            visibility: hidden;
+            pointer-events: none;
+        }
+
+        /* Class hooks (prod). Pasted snippets often use .fugu-rank__icon — keep both in sync. */
+        .fugu-rank__icon-wrap.is-switching,
+        .fugu-rank__icon.is-switching {
+            animation: rankIconSwitch 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        @keyframes rankIconSwitch {
+            0% {
+                opacity: 0.45;
+                transform: scale(0.78) rotate(-4deg);
+            }
+            55% {
+                opacity: 1;
+                transform: scale(1.06) rotate(1deg);
+            }
+            100% {
+                opacity: 1;
+                transform: scale(1) rotate(0deg);
+            }
+        }
+
+        .fugu-rank__name {
+            font-size: clamp(17px, 2.1vw, 25px);
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: rgba(255, 255, 255, 0.92);
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+        }
+
+        .fugu-rank__lol-division {
+            font-size: clamp(12.5px, 1.55vw, 17px);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: rgba(255, 255, 255, 0.68);
+            display: none;
+        }
+
+        .fugu-rank__rr-wrap {
+            font-size: clamp(22px, 2.65vw, 31px);
+            font-weight: bold;
+            line-height: 1.1;
+            padding: 8px 0;
+        }
+
+        /* Add `is-tick-up` or `is-tick-down` on #rrDisplay when RR changes; remove class after animationend. */
+        .fugu-rank__rr {
+            display: inline-block;
+        }
+
+        .fugu-rank__rr.is-tick-up {
+            animation: rrTickUp 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        .fugu-rank__rr.is-tick-down {
+            animation: rrTickDown 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        @keyframes rrTickUp {
+            0% {
+                transform: translateY(0) scale(1);
+                color: #fff;
+            }
+            40% {
+                transform: translateY(-12px) scale(1.15);
+                color: #5cff7a;
+            }
+            100% {
+                transform: translateY(0) scale(1);
+                color: #fff;
+            }
+        }
+
+        @keyframes rrTickDown {
+            0% {
+                transform: translateY(0) scale(1);
+                color: #fff;
+            }
+            40% {
+                transform: translateY(12px) scale(1.15);
+                color: #ff6b6b;
+            }
+            100% {
+                transform: translateY(0) scale(1);
+                color: #fff;
+            }
+        }
+
+        /* —— Match cards —— */
+        /* DOM order: index 0 = most recent; row-reverse packs matches next to rank (visual right). */
+        .fugu-cards {
+            flex: 1 1 auto;
+            display: flex;
+            flex-direction: row-reverse;
+            align-items: center;
+            justify-content: flex-start;
+            gap: clamp(8px, 1.2vw, 14px);
+            min-width: 0;
+            overflow: hidden;
+            mask-image: linear-gradient(to right, transparent 0%, #000 22%, #000 100%);
+        }
+
+        .game-card {
+            position: relative;
+            flex: 0 0 clamp(52px, 7.5vw, 76px);
+            width: clamp(52px, 7.5vw, 76px);
+            aspect-ratio: 3 / 4;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow:
+                0 4px 14px rgba(0, 0, 0, 0.45),
+                inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+            opacity: 0;
+            transform: translateY(14px) scale(0.94);
+            animation: cardEnter 0.65s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        }
+
+        .game-card:nth-child(1) { animation-delay: 0.2s; }
+        .game-card:nth-child(2) { animation-delay: 0.28s; }
+        .game-card:nth-child(3) { animation-delay: 0.36s; }
+        .game-card:nth-child(4) { animation-delay: 0.44s; }
+        .game-card:nth-child(5) { animation-delay: 0.52s; }
+        .game-card:nth-child(6) { animation-delay: 0.6s; }
+        .game-card:nth-child(7) { animation-delay: 0.66s; }
+        .game-card:nth-child(8) { animation-delay: 0.72s; }
+        .game-card:nth-child(9) { animation-delay: 0.78s; }
+        .game-card:nth-child(10) { animation-delay: 0.84s; }
+
+        @keyframes cardEnter {
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .game-card__map {
+            position: absolute;
+            inset: 0;
+            background-size: cover;
+            background-position: center;
+            transform: scale(1.08);
+            animation: mapDrift 8s ease-in-out infinite alternate;
+        }
+
+        @keyframes mapDrift {
+            from { transform: scale(1.08) translate(0, 0); }
+            to { transform: scale(1.12) translate(-2%, -1%); }
+        }
+
+        .game-card__tint {
+            position: absolute;
+            inset: 0;
+            mix-blend-mode: multiply;
+            opacity: 0.85;
+            transition: opacity 0.3s ease;
+        }
+
+        .game-card--win .game-card__tint {
+            background: linear-gradient(
+                160deg,
+                rgba(0, 180, 90, 0.55) 0%,
+                rgba(0, 120, 70, 0.75) 100%
+            );
+        }
+
+        .game-card--loss .game-card__tint {
+            background: linear-gradient(
+                160deg,
+                rgba(220, 50, 70, 0.55) 0%,
+                rgba(120, 20, 35, 0.78) 100%
+            );
+        }
+
+        /* LoL: pas d’image de map — fond uni vert / rouge selon W / L */
+        .game-card--lol .game-card__map {
+            background-image: none !important;
+            animation: none;
+            transform: none;
+        }
+
+        .game-card--lol.game-card--win .game-card__map {
+            background-color: #16a34a;
+        }
+
+        .game-card--lol.game-card--loss .game-card__map {
+            background-color: #dc2626;
+        }
+
+        .game-card--lol .game-card__tint {
+            opacity: 0;
+        }
+
+        /* Emplacements vides avant chargement API (pas de mockup) */
+        .game-card--placeholder .game-card__map {
+            background-image: none !important;
+            background-color: rgba(0, 0, 0, 0.22);
+            animation: none;
+            transform: none;
+        }
+
+        .game-card--placeholder .game-card__tint {
+            opacity: 0;
+        }
+
+        .game-card--placeholder .game-card__agent {
+            opacity: 0;
+        }
+
+        .game-card__agent {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            object-position: bottom center;
+            z-index: 1;
+            pointer-events: none;
+            filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.5));
+        }
+
+        /* —— Twitch commands: !showrank / !hiderank utilisent le slide sur .fugu-overlay —— */
+        .command-feedback {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            border-radius: 5px;
+            color: white;
+            font-weight: bold;
+            z-index: 10000;
+            opacity: 0;
+            transform: translateX(100%);
+            transition: all 0.3s ease;
+        }
+
+        .command-feedback.show {
+            opacity: 1;
+            transform: translateX(0);
+        }
+
+        .command-feedback.success {
+            background-color: #00ff00;
+            color: #000;
+        }
+
+        .command-feedback.error {
+            background-color: #ff0000;
+        }
+
+        .fugu-rank__lb {
+            font-size: clamp(13px, 1.65vw, 19px);
+            font-weight: bold;
+            color: #ff6b6b;
+            display: none;
+            position: relative;
+            letter-spacing: 0.02em;
+        }
+
+        .position-change {
+            position: absolute;
+            top: -24px;
+            right: 0;
+            font-size: 14px;
+            font-weight: bold;
+            opacity: 0;
+            transform: translateY(0);
+            animation: slideAndFadeLb 3s ease-out forwards;
+            pointer-events: none;
+        }
+
+        .position-change.up { color: #00ff00; }
+        .position-change.down { color: #ff4444; }
+
+        @keyframes slideAndFadeLb {
+            0% { opacity: 1; transform: translateY(0); }
+            50% { opacity: 1; transform: translateY(-8px); }
+            100% { opacity: 0; transform: translateY(-16px); }
+        }
+
+    </style>
+</head>
+<body>
+    <!--
+      Chat Twitch (anonymous IRC): #sc0rpio74890 par défaut — ?channel= pour un autre canal (ex. fugu_fps).
+      PUUID par défaut: même compte que rang-widget.html; surcharge avec ?puuid=
+      Commandes: !showrank !hiderank (glissent tout l’overlay), !lol !valo (même glissade pour changer de jeu)
+      API: ?puuid= optionnel (défaut interne) OU ?name=&tag= ou ?riot=name%23tag pour résoudre via Henrik.
+      Optionnel: ?api_key= ?region= ?platform= ?channel= ?poll_ms= (défaut 15000 ≈ 8 req/min Henrik ; mini 12s, max 300s)
+      Optionnel: tout peut être surchargé en query string ; sinon valeurs dans FUGU_OVERLAY_DEFAULTS (script).
+      Optionnel: ?mode=normal | ?mode=rank — rank seul : pas d’historique ni requêtes match (Henrik / Riot match-v5).
+      Optionnel: ?auto_game=1 & ?twitch_client_id= & ?twitch_access_token= (OAuth user avec channel:read) — suit la catégorie Twitch.
+
+      Prévisualisation: servir en http (pas file://). Ex: python3 -m http.server 8080
+    -->
+    <div class="fugu-overlay fugu-overlay--awaiting-data" id="fuguOverlayRoot" data-game="valorant" aria-label="Fugu rank overlay">
+        <div class="fugu-trapezoid">
+            <div class="fugu-inner">
+                <div class="fugu-history-stack">
+                    <div class="fugu-cards fugu-cards--valo" id="fuguHistoryTrackValo" aria-label="Historique Valorant">
+                        <!-- index 0 = plus récent -->
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                    </div>
+                    <div class="fugu-cards fugu-cards--lol" id="fuguHistoryTrackLol" aria-label="Historique League of Legends">
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                        <div class="game-card game-card--placeholder"><div class="game-card__map"></div><div class="game-card__tint"></div><img class="game-card__agent" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" decoding="async" /></div>
+                    </div>
+                </div>
+                <aside class="fugu-rank">
+                    <div class="fugu-rank__icon-wrap">
+                        <img
+                            class="fugu-rank__icon fugu-rank__icon--valo"
+                            src="valo/images/no-rank.png"
+                            alt=""
+                            width="76"
+                            height="76"
+                        />
+                        <img
+                            class="fugu-rank__icon fugu-rank__icon--lol"
+                            src="lol/images/Unrated.png"
+                            alt=""
+                            width="76"
+                            height="76"
+                        />
+                    </div>
+                    <div class="fugu-rank__meta">
+                        <span class="fugu-rank__name">—</span>
+                        <span class="fugu-rank__lol-division" id="lolDivisionDisplay"></span>
+                        <span class="fugu-rank__lb" id="leaderboardPosition" style="display: none;">#----</span>
+                        <div class="fugu-rank__rr-wrap">
+                            <span class="fugu-rank__rr" id="rrDisplay" style="display: none;"></span>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+        </div>
+    </div>
+    <div class="command-feedback" id="commandFeedback"></div>
+
+
+    <script>
+    /**
+     * Config embarquée (OBS sans query string). L’URL reste prioritaire : ?puuid= ?riot_api_key= …
+     * LoL: icône de rang = widget/rank/lol/images/{Tier}.png (Unrated, Emerald, …) ; champions lol/champion/*.jpg
+     * Aligné avec widget/rang/lol/rank-widget.html pour la clé Riot et les défauts Valorant.
+     * Twitch catégorie → jeu : ?auto_game=1 & ?twitch_client_id=… & ?twitch_access_token=… (token jamais dans le repo).
+     */
+    const FUGU_OVERLAY_DEFAULTS = {
+        valorant: {
+            puuid: '',
+            apiKey: '',
+            channel: '',
+            region: 'eu',
+            platform: 'pc',
+            pollMs: 15000,
+            leaderboard: false,
+            defaultGame: 'valo'
+        },
+        lol: {
+            riotApiKey: '',
+            puuid: '',
+            leaguePlatform: 'euw1',
+            regionalRoute: 'europe',
+            gameName: '',
+            tagLine: '',
+            matchListCount: 15,
+            ddragonVersion: '15.1.1',
+            queueFilter: '',
+            /** Fichiers dans widget/rank/lol/champion/ (ex. Ahri.jpg) — même nom que l’API match-v5 championName. */
+            championImageExt: 'jpg'
+        },
+        /** Helix depuis le navigateur. accessToken: uniquement en query (?twitch_access_token=) ou copie locale — jamais en git. */
+        twitch: {
+            /** Exemple d’ID public (console dev Twitch). Remplaçable par ?twitch_client_id= */
+            clientId: '',
+            accessToken: '',
+            autoGameFromCategory: false,
+            categoryPollMs: 60000
+        }
+    };
+
+    class ValorantRankWidget {
+        constructor() {
+            const _qp0 = new URLSearchParams(location.search);
+            const D = FUGU_OVERLAY_DEFAULTS;
+
+            this.puuid = _qp0.get('puuid') || D.valorant.puuid;
+            this.twitchChannel = (_qp0.get('channel') || D.valorant.channel).toLowerCase();
+            this.playerName = null;
+            this.playerTag = null;
+
+            this.updateInterval = (() => {
+                const raw = parseInt(_qp0.get('poll_ms') || String(D.valorant.pollMs), 10);
+                const ms = Number.isFinite(raw) ? raw : D.valorant.pollMs;
+                return Math.min(Math.max(ms, 12000), 300000);
+            })();
+            this.apiKey = _qp0.get('api_key') || D.valorant.apiKey;
+
+            this.region = (_qp0.get('region') || D.valorant.region).toLowerCase();
+            this.platform = (_qp0.get('platform') || D.valorant.platform).toLowerCase();
+
+            const _lbFallback = D.valorant.leaderboard ? 'true' : 'false';
+            const lbParam = (_qp0.get('leaderboard') || _lbFallback).toLowerCase();
+            this.leaderboardEnabled =
+                lbParam === '1' || lbParam === 'true' || lbParam === 'yes' || lbParam === 'on';
+
+            const _gameParam = (_qp0.get('game') || D.valorant.defaultGame).toLowerCase();
+            this.activeGame = _gameParam === 'lol' ? 'lol' : 'valo';
+            const _modeParam = (_qp0.get('mode') || 'normal').trim().toLowerCase();
+            this.overlayMode = _modeParam === 'rank' ? 'rank' : 'normal';
+            this._gameSwitchBusy = false;
+            this._slideTransitionMs = 560;
+
+            this.riotApiKey = (_qp0.get('riot_api_key') || D.lol.riotApiKey).trim();
+            this.lolPuuid = (_qp0.get('lol_puuid') || D.lol.puuid || '').trim();
+            this.lolLeaguePlatform = (_qp0.get('lol_league_platform') || D.lol.leaguePlatform).toLowerCase();
+            this.lolRegionalRoute = (_qp0.get('lol_route') || D.lol.regionalRoute).toLowerCase();
+            this.lolGameName = (_qp0.get('lol_name') || D.lol.gameName).trim();
+            this.lolTagLine = (_qp0.get('lol_tag') || D.lol.tagLine).trim();
+            const _lolMc = parseInt(_qp0.get('lol_match_count') || String(D.lol.matchListCount), 10);
+            this.lolMatchListCount = Math.min(25, Math.max(1, Number.isFinite(_lolMc) ? _lolMc : D.lol.matchListCount));
+            this.lolHistoryCardMax = Math.min(10, this.lolMatchListCount);
+            this.ddragonVersion = _qp0.get('ddragon') || D.lol.ddragonVersion;
+            this.lolQueueFilter = (_qp0.get('lol_queue') || D.lol.queueFilter || '').trim() || null;
+            this.lolChampionImageExt = (
+                _qp0.get('lol_champion_ext') ||
+                D.lol.championImageExt ||
+                'jpg'
+            )
+                .replace(/^\./, '')
+                .toLowerCase();
+
+            const Tw = D.twitch || {};
+            this.twitchClientId = String(_qp0.get('twitch_client_id') || Tw.clientId || '').trim();
+            this.twitchAccessToken = String(_qp0.get('twitch_access_token') || Tw.accessToken || '').trim();
+            const _autoG = (_qp0.get('auto_game') || '').toLowerCase();
+            this.autoGameFromCategory =
+                Tw.autoGameFromCategory === true ||
+                _autoG === '1' ||
+                _autoG === 'true' ||
+                _autoG === 'yes' ||
+                _autoG === 'on';
+            const _tcp = parseInt(_qp0.get('twitch_category_poll_ms') || String(Tw.categoryPollMs || 60000), 10);
+            this.twitchCategoryPollMs =
+                Number.isFinite(_tcp) ? Math.min(Math.max(_tcp, 15000), 600000) : 60000;
+
+            this.lolRankData = {
+                displayRank: '—',
+                tierLabel: '—',
+                lp: 0,
+                tier: '',
+                rankRoman: '',
+                wins: 0,
+                losses: 0,
+                hasNoRank: true,
+                tierIconUrl: 'lol/images/Unrated.png'
+            };
+
+            this._valoSnapshot = null;
+            this._lolSnapshot = null;
+            this._valoLastEntries = null;
+            this._lolLastEntries = null;
+            this._gameSwitchGeneration = 0;
+            this._fetchGenSnapshot = 0;
+            /** Cache match-v5 par matchId (évite de re-télécharger les mêmes parties à chaque poll). */
+            this._lolMatchCache = new Map();
+            this._lolMatchCachePuuid = null;
+
+                            // Role-based access control system — aligné sur rang-widget.html
+            this.moderators = [
+                'fugu_fps',
+                'wizebot',
+                'wzbot',
+                'emmamachou',
+                'gamlno',
+                'd3vilsfr',
+                'pogo__fps',
+                'babouille__',
+                'spoutnik_le_puant',
+                'z4apox',
+                'kudji__',
+                'kc_biolxzy',
+                'silaaaxe',
+                'streamelements',
+                'nutelloush',
+                'mustee___',
+                'ze1sh',
+                'vincent_maes12',
+                'dragonk_fps',
+                'chloedsx',
+                'maeniiaaa',
+                'g4li_fps',
+                'xiress_gp',
+                'prodigymarketing',
+                'chaima_2808',
+                'lea_ackermann',
+                'darkoootv'
+            ];
+
+            this.vips = ['sc0rpio74890'];
+
+            this.blacklist = [
+                'banned_user1',
+                'banned_user2'
+            ];
+
+            // Overlay visibility state
+            this.isOverlayVisible = true;
+
+            // Manual mode - when enabled, API calls are disabled and data comes from control panel
+            this.manualMode = false;
+
+            /** Évite les appels parallèles (setInterval + async ne file pas la queue) */
+            this._fetchBothBusy = false;
+
+            // Données actuelles du rang (remplies par API / localStorage — pas de rang fictif au départ)
+            this.currentRankData = {
+                rank: 'No Rank',
+                rr: 0,
+                tier: 0,
+                hasNoRank: true
+            };
+
+            // Leaderboard data
+            this.currentLeaderboardData = null;
+            this.previousPosition = null;
+
+            // Store previous values for comparison
+            this.previousRR = 0;
+            this.lastChange = null;
+            this.isAnimating = false;
+            this.isPositionAnimating = false;
+
+            // Mapping des rangs avec les images locales
+            this.rankImages = {
+                0: 'valo/images/no-rank.png',
+                3: 'valo/images/Iron_1_Rank.png',
+                4: 'valo/images/Iron_2_Rank.png',
+                5: 'valo/images/Iron_3_Rank.png',
+                6: 'valo/images/Bronze_1_Rank.png',
+                7: 'valo/images/Bronze_2_Rank.png',
+                8: 'valo/images/Bronze_3_Rank.png',
+                9: 'valo/images/Silver_1_Rank.png',
+                10: 'valo/images/Silver_2_Rank.png',
+                11: 'valo/images/Silver_3_Rank.png',
+                12: 'valo/images/Gold_1_Rank.png',
+                13: 'valo/images/Gold_2_Rank.png',
+                14: 'valo/images/Gold_3_Rank.png',
+                15: 'valo/images/Platinum_1_Rank.png',
+                16: 'valo/images/Platinum_2_Rank.png',
+                17: 'valo/images/Platinum_3_Rank.png',
+                18: 'valo/images/Diamond_1_Rank.png',
+                19: 'valo/images/Diamond_2_Rank.png',
+                20: 'valo/images/Diamond_3_Rank.png',
+                21: 'valo/images/Ascendant_1_Rank.png',
+                22: 'valo/images/Ascendant_2_Rank.png',
+                23: 'valo/images/Ascendant_3_Rank.png',
+                24: 'valo/images/Immortal_1_Rank.png',
+                25: 'valo/images/Immortal_2_Rank.png',
+                26: 'valo/images/Immortal_3_Rank.png',
+                27: 'valo/images/Radiant_Rank.png'
+            };
+
+            // Mapping inverse des noms de rangs vers les IDs
+            this.rankNameToId = {
+                'No Rank': 0,
+                'No rank': 0,
+                'Iron 1': 3, 'Iron 2': 4, 'Iron 3': 5,
+                'Bronze 1': 6, 'Bronze 2': 7, 'Bronze 3': 8,
+                'Silver 1': 9, 'Silver 2': 10, 'Silver 3': 11,
+                'Gold 1': 12, 'Gold 2': 13, 'Gold 3': 14,
+                'Platinum 1': 15, 'Platinum 2': 16, 'Platinum 3': 17,
+                'Diamond 1': 18, 'Diamond 2': 19, 'Diamond 3': 20,
+                'Ascendant 1': 21, 'Ascendant 2': 22, 'Ascendant 3': 23,
+                'Immortal 1': 24, 'Immortal 2': 25, 'Immortal 3': 26,
+                'Radiant': 27
+            };
+
+            this.init();
+        }
+
+        // Method to update user lists (can be called from console for testing)
+        updateUserLists(newModerators = null, newVips = null, newBlacklist = null) {
+            if (newModerators) {
+                this.moderators = newModerators.map(u => u.toLowerCase());
+                console.log('📝 Liste des modérateurs mise à jour:', this.moderators);
+            }
+
+            if (newVips) {
+                this.vips = newVips.map(u => u.toLowerCase());
+                console.log('📝 Liste des VIPs mise à jour:', this.vips);
+            }
+
+            if (newBlacklist) {
+                this.blacklist = newBlacklist.map(u => u.toLowerCase());
+                console.log('📝 Blacklist mise à jour:', this.blacklist);
+            }
+        }
+
+        // Method to add/remove users from lists
+        addModerator(username) {
+            if (!this.moderators.includes(username.toLowerCase())) {
+                this.moderators.push(username.toLowerCase());
+                console.log(`✅ ${username} ajouté aux modérateurs`);
+            }
+        }
+
+        // Méthode de test pour vérifier les permissions (à appeler depuis la console)
+        testCommandPermissions(username) {
+            console.log(`🧪 Test des permissions pour: ${username}`);
+            console.log(`   👮 Modérateur: ${this.moderators.includes(username.toLowerCase())}`);
+            console.log(`   👑 VIP: ${this.vips.includes(username.toLowerCase())}`);
+            console.log(`   🚫 Blacklisté: ${this.blacklist.includes(username.toLowerCase())}`);
+            console.log(`   ✅ Peut utiliser les commandes: ${this.hasPermission(username)}`);
+        }
+
+                    // Méthode de test pour déclencher un refresh manuellement
+        testRefreshRank() {
+            console.log('🧪 Test de refresh manuel - Rechargement de la page...');
+            this.executePageReload();
+        }
+
+        // Méthode pour recharger la page entière
+        executePageReload() {
+            console.log('🔄 Rechargement forcé de la page...');
+
+            // Option 1: Rechargement simple
+            window.location.reload();
+
+            // Option 2: Rechargement forcé (ignorer le cache)
+            // window.location.reload(true);
+
+            // Option 3: Rechargement avec remplacement d'historique
+            // window.location.replace(window.location.href);
+        }
+
+        removeModerator(username) {
+            const index = this.moderators.indexOf(username.toLowerCase());
+            if (index > -1) {
+                this.moderators.splice(index, 1);
+                console.log(`❌ ${username} retiré des modérateurs`);
+            }
+        }
+
+        addVIP(username) {
+            if (!this.vips.includes(username.toLowerCase())) {
+                this.vips.push(username.toLowerCase());
+                console.log(`✅ ${username} ajouté aux VIPs`);
+            }
+        }
+
+        removeVIP(username) {
+            const index = this.vips.indexOf(username.toLowerCase());
+            if (index > -1) {
+                this.vips.splice(index, 1);
+                console.log(`❌ ${username} retiré des VIPs`);
+            }
+        }
+
+        addToBlacklist(username) {
+            if (!this.blacklist.includes(username.toLowerCase())) {
+                this.blacklist.push(username.toLowerCase());
+                console.log(`🚫 ${username} ajouté à la blacklist`);
+            }
+        }
+
+        removeFromBlacklist(username) {
+            const index = this.blacklist.indexOf(username.toLowerCase());
+            if (index > -1) {
+                this.blacklist.splice(index, 1);
+                console.log(`✅ ${username} retiré de la blacklist`);
+            }
+        }
+
+        // Check if user has permission to use commands
+        hasPermission(username, userTags) {
+            // Check blacklist first
+            if (this.blacklist.includes(username.toLowerCase())) {
+                console.log(`🚫 Utilisateur ${username} est dans la blacklist`);
+                return false;
+            }
+
+            // Check if user is moderator
+            if (this.moderators.includes(username.toLowerCase())) {
+                console.log(`✅ ${username} est modérateur`);
+                return true;
+            }
+
+            // Check if user is VIP
+            if (this.vips.includes(username.toLowerCase())) {
+                console.log(`✅ ${username} est VIP`);
+                return true;
+            }
+
+            // Check user tags for moderator or VIP status
+            if (userTags) {
+                if (userTags.includes('moderator=1') || userTags.includes('vip=1')) {
+                    console.log(`✅ ${username} a les permissions via tags Twitch`);
+                    return true;
+                }
+            }
+
+            console.log(`❌ ${username} n'a pas les permissions`);
+            return false;
+        }
+
+        // Show the overlay (slide in from left to normal position)
+        showOverlay() {
+            const root = document.getElementById('fuguOverlayRoot');
+            if (!root) return;
+            if (!this.isOverlayVisible) {
+                console.log('👁️ Overlay affiché via commande');
+            }
+            this.isOverlayVisible = true;
+            root.classList.remove('fugu-overlay--offscreen');
+            root.setAttribute('aria-hidden', 'false');
+        }
+
+        // Hide the overlay (slide left off-screen)
+        hideOverlay() {
+            const root = document.getElementById('fuguOverlayRoot');
+            if (!root) return;
+            if (this.isOverlayVisible) {
+                console.log('🙈 Overlay masqué via commande');
+            }
+            this.isOverlayVisible = false;
+            root.classList.add('fugu-overlay--offscreen');
+            root.setAttribute('aria-hidden', 'true');
+        }
+
+        clearMatchHistoryCards(game) {
+            const blank = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+            const clearOne = (track) => {
+                if (!track) return;
+                track.querySelectorAll('.game-card').forEach((card) => {
+                    card.classList.remove(
+                        'game-card--lol',
+                        'game-card--win',
+                        'game-card--loss',
+                        'game-card--placeholder'
+                    );
+                    card.classList.add('game-card--placeholder');
+                    const mapEl = card.querySelector('.game-card__map');
+                    const agentEl = card.querySelector('.game-card__agent');
+                    if (mapEl) {
+                        mapEl.style.removeProperty('background-image');
+                        mapEl.style.removeProperty('background-color');
+                    }
+                    if (agentEl) {
+                        agentEl.onerror = null;
+                        agentEl.src = blank;
+                    }
+                });
+            };
+            const modes = !game ? ['valo', 'lol'] : [game === 'lol' ? 'lol' : 'valo'];
+            for (const g of modes) {
+                const id = g === 'lol' ? 'fuguHistoryTrackLol' : 'fuguHistoryTrackValo';
+                clearOne(document.getElementById(id));
+            }
+            if (!game || game === this.activeGame) {
+                window.__overlayFuguMatchCount = 0;
+            }
+            if (typeof window.overlayFuguUpdateHistoryCount === 'function') {
+                window.overlayFuguUpdateHistoryCount();
+            }
+        }
+
+        setDataPanelVisible(visible) {
+            const root = document.getElementById('fuguOverlayRoot');
+            if (!root) return;
+            root.classList.toggle('fugu-overlay--awaiting-data', !visible);
+        }
+
+        _takeValoSnapshot() {
+            this._valoSnapshot = {
+                currentRankData: JSON.parse(JSON.stringify(this.currentRankData)),
+                previousRR: this.previousRR,
+                lastChange: this.lastChange,
+                matchEntries: this._valoLastEntries
+                    ? this._valoLastEntries.map((e) => ({ ...e }))
+                    : [],
+                currentLeaderboardData: this.currentLeaderboardData
+                    ? JSON.parse(JSON.stringify(this.currentLeaderboardData))
+                    : null,
+                previousPosition: this.previousPosition
+            };
+        }
+
+        _restoreValoFromSnapshot() {
+            const s = this._valoSnapshot;
+            if (!s) return;
+            this.currentRankData = JSON.parse(JSON.stringify(s.currentRankData));
+            this.previousRR = s.previousRR;
+            this.lastChange = s.lastChange;
+            this.currentLeaderboardData = s.currentLeaderboardData
+                ? JSON.parse(JSON.stringify(s.currentLeaderboardData))
+                : null;
+            this.previousPosition = s.previousPosition;
+            if (s.matchEntries && s.matchEntries.length > 0 && this.overlayMode !== 'rank') {
+                this.applyMatchHistoryToCards(s.matchEntries);
+            } else {
+                this.clearMatchHistoryCards('valo');
+            }
+            this.displayCurrentRank();
+            this.displayLeaderboardPosition();
+        }
+
+        _takeLolSnapshot() {
+            this._lolSnapshot = {
+                lolRankData: JSON.parse(JSON.stringify(this.lolRankData)),
+                matchEntries: this._lolLastEntries
+                    ? this._lolLastEntries.map((e) => ({ ...e }))
+                    : []
+            };
+        }
+
+        _restoreLolFromSnapshot() {
+            const s = this._lolSnapshot;
+            if (!s) return;
+            this.lolRankData = JSON.parse(JSON.stringify(s.lolRankData));
+            if (s.matchEntries && s.matchEntries.length > 0 && this.overlayMode !== 'rank') {
+                this.applyLolMatchHistoryToCards(s.matchEntries);
+            } else {
+                this.clearMatchHistoryCards('lol');
+            }
+            this.displayCurrentRank();
+            this.displayLeaderboardPosition();
+        }
+
+        applyGameShell(game) {
+            const root = document.getElementById('fuguOverlayRoot');
+            const trap = root && root.querySelector('.fugu-trapezoid');
+            if (root) {
+                root.setAttribute('data-game', game === 'lol' ? 'lol' : 'valorant');
+                root.setAttribute('aria-label', game === 'lol' ? 'League of Legends overlay' : 'Valorant rank overlay');
+            }
+            if (trap) {
+                trap.classList.toggle('fugu-trapezoid--lol', game === 'lol');
+            }
+            this.applyOverlayMode();
+        }
+
+        /** ?mode=rank — masque l’historique et désactive les fetch match côté JS. */
+        applyOverlayMode() {
+            const root = document.getElementById('fuguOverlayRoot');
+            if (!root) {
+                return;
+            }
+            const rankOnly = this.overlayMode === 'rank';
+            root.classList.toggle('fugu-overlay--rank-only', rankOnly);
+            root.setAttribute('data-mode', this.overlayMode);
+        }
+
+        /**
+         * Cœur du swap de jeu (snapshots + fetch). Utilisé par le slide chat et par la catégorie Twitch sans animation.
+         */
+        _performGameSwitch(nextGame) {
+            const prevGame = this.activeGame;
+            if (prevGame === 'valo' && nextGame === 'lol') {
+                this._takeValoSnapshot();
+            } else if (prevGame === 'lol' && nextGame === 'valo') {
+                this._takeLolSnapshot();
+            }
+
+            this._gameSwitchGeneration++;
+            this._fetchBothBusy = false;
+            this.activeGame = nextGame;
+            this.applyGameShell(nextGame);
+
+            const canRestore =
+                (nextGame === 'valo' && this._valoSnapshot) || (nextGame === 'lol' && this._lolSnapshot);
+
+            if (canRestore) {
+                this.fetchBothAPIs({ fromSwitch: true });
+            } else {
+                this.clearMatchHistoryCards(nextGame === 'lol' ? 'lol' : 'valo');
+                this.setDataPanelVisible(false);
+                this.displayCurrentRank();
+                this.displayLeaderboardPosition();
+                this.fetchBothAPIs({ fromSwitch: true });
+            }
+        }
+
+        /**
+         * Bascule sans slide (ex. catégorie Twitch automatique).
+         */
+        switchGameSilent(nextGame) {
+            if (nextGame !== 'lol' && nextGame !== 'valo') {
+                return;
+            }
+            if (nextGame === this.activeGame) {
+                return;
+            }
+            if (this._gameSwitchBusy) {
+                return;
+            }
+            this._performGameSwitch(nextGame);
+            console.log(`📺 Bascule auto (catégorie Twitch) → ${nextGame === 'lol' ? 'LoL' : 'Valorant'}`);
+        }
+
+        async _twitchHelixGet(pathWithQuery) {
+            if (!this.twitchClientId || !this.twitchAccessToken) {
+                throw new Error('Helix: client_id ou access_token manquant');
+            }
+            const url = `https://api.twitch.tv/helix/${pathWithQuery.replace(/^\//, '')}`;
+            const res = await fetch(url, {
+                headers: {
+                    'Client-Id': this.twitchClientId,
+                    Authorization: `Bearer ${this.twitchAccessToken}`,
+                    Accept: 'application/json'
+                }
+            });
+            if (!res.ok) {
+                let detail = '';
+                try {
+                    const errBody = await res.json();
+                    detail = errBody && (errBody.message || JSON.stringify(errBody));
+                } catch (_) {
+                    /* ignore */
+                }
+                throw new Error(`Helix HTTP ${res.status}${detail ? ` — ${detail}` : ''}`);
+            }
+            return res.json();
+        }
+
+        async fetchTwitchChannelGameName() {
+            const login = (this.twitchChannel || '').replace(/^#/, '').trim().toLowerCase();
+            if (!login) {
+                return '';
+            }
+            const usersJson = await this._twitchHelixGet(`users?login=${encodeURIComponent(login)}`);
+            const uid = usersJson && usersJson.data && usersJson.data[0] && usersJson.data[0].id;
+            if (!uid) {
+                console.warn('[Twitch] Aucun utilisateur Helix pour login:', login);
+                return '';
+            }
+            const chJson = await this._twitchHelixGet(`channels?broadcaster_id=${encodeURIComponent(uid)}`);
+            const row = chJson && chJson.data && chJson.data[0];
+            return row && row.game_name ? String(row.game_name) : '';
+        }
+
+        /** Catégorie Twitch (game_name) → 'valo' | 'lol' | null si on ne bascule pas. */
+        mapTwitchCategoryToGame(gameName) {
+            if (!gameName || typeof gameName !== 'string') {
+                return null;
+            }
+            const n = gameName.trim().toLowerCase();
+            if (n.includes('valorant')) {
+                return 'valo';
+            }
+            if (n.includes('league of legends') || /^lol\b/.test(n) || n === 'lol') {
+                return 'lol';
+            }
+            return null;
+        }
+
+        /** Lit la catégorie et aligne activeGame si besoin (sans slide). */
+        async syncActiveGameFromTwitchCategory() {
+            if (!this.autoGameFromCategory) {
+                return;
+            }
+            if (!this.twitchClientId || !this.twitchAccessToken) {
+                console.warn(
+                    "📺 auto_game: définir twitch_client_id et twitch_access_token (URL ou FUGU_OVERLAY_DEFAULTS.twitch) — jeton OAuth user, scope typique channel:read"
+                );
+                return;
+            }
+            try {
+                const gameName = await this.fetchTwitchChannelGameName();
+                const mapped = this.mapTwitchCategoryToGame(gameName);
+                if (mapped && mapped !== this.activeGame) {
+                    console.log(`📺 Catégorie Twitch: “${gameName}” → sync jeu ${mapped}`);
+                    this.switchGameSilent(mapped);
+                } else if (mapped) {
+                    console.log(`📺 Catégorie Twitch: “${gameName || '(vide)'}” (déjà ${this.activeGame})`);
+                } else {
+                    console.log(
+                        `📺 Catégorie Twitch: “${gameName || '(non reconnue / vide)'}” — jeu inchangé (${this.activeGame})`
+                    );
+                }
+            } catch (err) {
+                console.warn('📺 auto_game Helix:', err.message || err);
+                if (String(err.message || '').includes('Failed to fetch')) {
+                    console.warn(
+                        '   → Si blocage CORS: sers la page en HTTPS sur un domaine autorisé, ou passe par un petit proxy.'
+                    );
+                }
+            }
+        }
+
+        /**
+         * !lol / !valo : glissade hors écran puis retour (même effet que !hiderank → !showrank), avec swap du shell jeu.
+         */
+        switchGameWithSlide(nextGame) {
+            if (nextGame !== 'lol' && nextGame !== 'valo') {
+                return;
+            }
+            if (nextGame === this.activeGame) {
+                console.log(`ℹ️ Déjà en mode ${nextGame === 'lol' ? 'LoL' : 'Valorant'}`);
+                this.showCommandFeedback(nextGame === 'lol' ? 'Déjà sur LoL' : 'Déjà sur Valorant', 'success');
+                return;
+            }
+            if (this._gameSwitchBusy) {
+                return;
+            }
+            const root = document.getElementById('fuguOverlayRoot');
+            if (!root) {
+                return;
+            }
+
+            this._gameSwitchBusy = true;
+            const wasVisible = this.isOverlayVisible;
+            const ms = this._slideTransitionMs;
+
+            const applyAndReveal = () => {
+                this._performGameSwitch(nextGame);
+                if (wasVisible) {
+                    requestAnimationFrame(() => {
+                        root.classList.remove('fugu-overlay--offscreen');
+                        this.isOverlayVisible = true;
+                        root.setAttribute('aria-hidden', 'false');
+                    });
+                }
+                setTimeout(() => {
+                    this._gameSwitchBusy = false;
+                }, 80);
+            };
+
+            if (wasVisible) {
+                root.classList.add('fugu-overlay--offscreen');
+                this.isOverlayVisible = false;
+                root.setAttribute('aria-hidden', 'true');
+                setTimeout(applyAndReveal, ms);
+            } else {
+                applyAndReveal();
+            }
+
+            console.log(
+                `🔀 Bascule → ${nextGame === 'lol' ? 'LoL' : 'Valorant'} (${wasVisible ? 'slide' : 'overlay déjà masqué'})`
+            );
+        }
+
+        // Show command feedback
+        showCommandFeedback(message, type = 'success') {
+            const feedback = document.getElementById('commandFeedback');
+            feedback.textContent = message;
+            feedback.className = `command-feedback ${type}`;
+
+            // Show the feedback
+            setTimeout(() => {
+                feedback.classList.add('show');
+            }, 100);
+
+            // Hide the feedback after 3 seconds
+            setTimeout(() => {
+                feedback.classList.remove('show');
+            }, 3000);
+        }
+
+        /**
+         * Twitch / clients collent souvent des caractères invisibles (ZWSP, CGJ U+034F, etc.) après une commande.
+         * trim() ne les enlève pas → !lol͏ ne matchait pas '!lol'.
+         */
+        normalizeTwitchCommandMessage(raw) {
+            if (!raw || typeof raw !== 'string') {
+                return '';
+            }
+            const stripped = raw
+                .replace(/[\u200B-\u200D\uFEFF\u2060-\u2064\u034F\u00AD\u061C\u115F\u1160\u17B4\u17B5\u180E\u200E\u200F]/g, '')
+                .trim()
+                .toLowerCase();
+            const first = stripped.split(/\s+/).filter(Boolean)[0] || '';
+            return first;
+        }
+
+        // Parse and handle chat commands
+        parseChatCommand(username, message, userTags) {
+            const command = this.normalizeTwitchCommandMessage(message);
+
+            if (command === '!showrank') {
+                if (this.hasPermission(username, userTags)) {
+                    console.log(`🎮 Commande !showrank reçue de ${username}`);
+                    this.showOverlay();
+                } else {
+                    console.log(`❌ ${username} a tenté d'utiliser !showrank sans permission`);
+                }
+                return;
+            }
+
+            if (command === '!hiderank') {
+                if (this.hasPermission(username, userTags)) {
+                    console.log(`🎮 Commande !hiderank reçue de ${username}`);
+                    this.hideOverlay();
+                } else {
+                    console.log(`❌ ${username} a tenté d'utiliser !hiderank sans permission`);
+                }
+                return;
+            }
+
+            if (command === '!lol') {
+                if (this.hasPermission(username, userTags)) {
+                    console.log(`🎮 Commande !lol reçue de ${username}`);
+                    this.switchGameWithSlide('lol');
+                } else {
+                    console.log(`❌ ${username} a tenté !lol sans permission`);
+                }
+                return;
+            }
+
+            if (command === '!valo') {
+                if (this.hasPermission(username, userTags)) {
+                    console.log(`🎮 Commande !valo reçue de ${username}`);
+                    this.switchGameWithSlide('valo');
+                } else {
+                    console.log(`❌ ${username} a tenté !valo sans permission`);
+                }
+                return;
+            }
+
+                            if (command === '!refreshrank' || command === '!rankreload') {
+                if (this.hasPermission(username, userTags)) {
+                    console.log(`🔄 Commande ${command} reçue de ${username} - Rechargement forcé de la page...`);
+
+                    // Recharger la page entière (comme dans le chat widget)
+                    this.executePageReload();
+                } else {
+                    console.log(`❌ ${username} a tenté d'utiliser ${command} sans permission`);
+                }
+                return;
+            }
+
+            // Log unknown commands for debugging
+            if (command.startsWith('!')) {
+                console.log(`❓ Commande inconnue reçue de ${username}: ${command}`);
+            }
+        }
+
+        // Check for manual mode (pas de panneau distant SSE sur cet overlay : APIs ou `setManualRankData` console)
+        checkManualMode() {
+            return this.manualMode;
+        }
+
+        // Set manual rank data
+        setManualRankData(rankData) {
+            const oldRR = this.currentRankData.rr;
+            const oldTier = this.currentRankData.tier;
+
+            // Update rank data
+            this.currentRankData = {
+                rank: rankData.rank || 'No Rank',
+                rr: rankData.rr || 0,
+                tier: rankData.tier || 0,
+                hasNoRank: rankData.hasNoRank || false
+            };
+
+            // Update leaderboard data if provided
+            if (rankData.leaderboard_rank !== undefined) {
+                if (rankData.leaderboard_rank === null) {
+                    this.currentLeaderboardData = null;
+                } else {
+                    this.currentLeaderboardData = {
+                        leaderboard_rank: rankData.leaderboard_rank,
+                        estimated: rankData.leaderboard_estimated || false
+                    };
+                }
+            }
+
+            console.log('✅ Données manuelles mises à jour:', this.currentRankData);
+
+            // Update display with animation if RR or tier changed
+            if (oldTier !== this.currentRankData.tier) {
+                this.updateRankImage();
+            }
+
+            if (oldRR !== this.currentRankData.rr) {
+                const changeValue = rankData.last_change || null;
+                this.animateRRChange(oldRR, this.currentRankData.rr, changeValue);
+            } else {
+                this.displayCurrentRank();
+            }
+
+            this.displayLeaderboardPosition();
+        }
+
+        puuidStorageKey() {
+            return `fugu-valorant-puuid-${this.twitchChannel || 'default'}`;
+        }
+
+        /** Persist PUUID so OBS peut recharger sans tout remettre dans l’URL */
+        cachePuuidToStorage() {
+            if (!this.puuid) return;
+            try {
+                localStorage.setItem(this.puuidStorageKey(), this.puuid);
+            } catch (e) {
+                /* ignore */
+            }
+        }
+
+        /**
+         * Sans PUUID, les APIs (rang, leaderboard, historique) ne partent pas.
+         * Ordre: URL ?puuid= → localStorage → résolution ?name=&tag= ou ?riot=
+         */
+        async ensurePuuid() {
+            if (this.puuid) {
+                this.cachePuuidToStorage();
+                return true;
+            }
+            try {
+                const cached = localStorage.getItem(this.puuidStorageKey());
+                if (cached && cached.length >= 20) {
+                    this.puuid = cached;
+                    console.log('👤 PUUID restauré depuis le cache navigateur');
+                    return true;
+                }
+            } catch (e) {
+                /* ignore */
+            }
+
+            const qp = new URLSearchParams(location.search);
+            let name = (qp.get('name') || qp.get('riot_name') || '').trim();
+            let tag = (qp.get('tag') || qp.get('riot_tag') || '').trim();
+            const riot = qp.get('riot');
+            if ((!name || !tag) && riot) {
+                const decoded = decodeURIComponent(riot).replace(/\s+$/, '').trim();
+                const hash = decoded.indexOf('#');
+                if (hash !== -1) {
+                    name = decoded.slice(0, hash).trim();
+                    tag = decoded.slice(hash + 1).trim();
+                }
+            }
+
+            if (!name || !tag) {
+                console.warn(
+                    "[overlay-fugu] PUUID manquant. Ajoutez ?puuid=… dans l'URL OBS, ou ?name=…&tag=… (ou ?riot=Nom%23Tag). Sans cela, rang API et historique competitive ne s'actualisent pas."
+                );
+                return false;
+            }
+
+            try {
+                const url = `https://api.henrikdev.xyz/valorant/v1/account/${encodeURIComponent(name)}/${encodeURIComponent(tag)}?api_key=${encodeURIComponent(this.apiKey)}`;
+                console.log('🔑 Résolution du PUUID via Henrik (v1/account)…');
+                const res = await fetch(url);
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
+                const json = await res.json();
+                const puuid = json && json.data && json.data.puuid;
+                if (!puuid || typeof puuid !== 'string') {
+                    throw new Error('Réponse sans data.puuid');
+                }
+                this.puuid = puuid;
+                this.playerName = json.data.name || name;
+                this.playerTag = json.data.tag || tag;
+                this.cachePuuidToStorage();
+                console.log('✅ PUUID résolu, compte:', `${this.playerName}#${this.playerTag}`);
+                return true;
+            } catch (err) {
+                console.error('❌ Échec résolution PUUID (vérifiez name/tag et la clé API):', err);
+                return false;
+            }
+        }
+
+        /**
+         * Riot renvoie les quotas dans les en-têtes (doc: X-App-Rate-Limit + Count, idem par méthode).
+         * Affiche le nombre de requêtes encore disponibles par bucket (max - used) après chaque réponse.
+         */
+        _logRiotRateLimitFromResponse(response, label) {
+            if (!response || typeof response.headers?.get !== 'function') {
+                return;
+            }
+            const appLim = response.headers.get('X-App-Rate-Limit');
+            const appCnt = response.headers.get('X-App-Rate-Limit-Count');
+            const methLim = response.headers.get('X-Method-Rate-Limit');
+            const methCnt = response.headers.get('X-Method-Rate-Limit-Count');
+            const retryAfter = response.headers.get('Retry-After');
+            const rlType = response.headers.get('X-Rate-Limit-Type');
+
+            const formatBuckets = (limRaw, cntRaw) => {
+                if (!limRaw || !cntRaw) {
+                    return null;
+                }
+                const limParts = limRaw.split(',').map((s) => s.trim()).filter(Boolean);
+                const cntParts = cntRaw.split(',').map((s) => s.trim()).filter(Boolean);
+                if (limParts.length !== cntParts.length) {
+                    return `raw limit=${limRaw} count=${cntRaw}`;
+                }
+                const out = [];
+                for (let i = 0; i < limParts.length; i++) {
+                    const lp = limParts[i].split(':');
+                    const cp = cntParts[i].split(':');
+                    const max = parseInt(lp[0], 10);
+                    const win = parseInt(lp[1], 10);
+                    const used = parseInt(cp[0], 10);
+                    const remaining =
+                        Number.isFinite(max) && Number.isFinite(used) ? Math.max(0, max - used) : '—';
+                    out.push(`${remaining} left (${used}/${max} used, ${win}s window)`);
+                }
+                return out.join(' · ');
+            };
+
+            const appTxt = formatBuckets(appLim, appCnt);
+            const methTxt = formatBuckets(methLim, methCnt);
+
+            if (!appTxt && !methTxt && !retryAfter && !rlType) {
+                console.log(`🛡️ Riot API [${label}] HTTP ${response.status} — pas d’en-têtes de quota (normal sur certaines routes / CORS).`);
+                return;
+            }
+
+            const bits = [`🛡️ Riot API [${label}] HTTP ${response.status}`];
+            if (appTxt) {
+                bits.push(`application: ${appTxt}`);
+            }
+            if (methTxt) {
+                bits.push(`method: ${methTxt}`);
+            }
+            if (rlType) {
+                bits.push(`X-Rate-Limit-Type=${rlType}`);
+            }
+            if (retryAfter) {
+                bits.push(`Retry-After=${retryAfter}s`);
+            }
+            console.log(bits.join(' | '));
+        }
+
+        /** Résout lol_puuid via riot/account/v1 si absent (?lol_name= & ?lol_tag= + ?riot_api_key=). */
+        async ensureLolPuuid() {
+            if (this.lolPuuid && this.lolPuuid.length >= 20) {
+                return true;
+            }
+            if (!this.riotApiKey) {
+                console.warn(
+                    '[overlay-fugu LoL] Clé manquante : ajoutez ?riot_api_key= à l’URL (ne pas commit la clé).'
+                );
+                return false;
+            }
+            const name = this.lolGameName;
+            const tag = this.lolTagLine;
+            if (!name || !tag) {
+                console.warn(
+                    '[overlay-fugu LoL] Ajoutez ?lol_puuid=… ou ?lol_name=…&lol_tag=… pour résoudre le compte Riot.'
+                );
+                return false;
+            }
+            try {
+                const url = `https://${this.lolRegionalRoute}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(
+                    name
+                )}/${encodeURIComponent(tag)}?api_key=${encodeURIComponent(this.riotApiKey)}`;
+                console.log('🔑 LoL — résolution PUUID via Riot Account v1…');
+                const res = await fetch(url);
+                this._logRiotRateLimitFromResponse(res, 'riot/account/v1/accounts/by-riot-id');
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
+                const json = await res.json();
+                const puuid = json && json.puuid;
+                if (!puuid || typeof puuid !== 'string') {
+                    throw new Error('Réponse sans puuid');
+                }
+                this.lolPuuid = puuid;
+                console.log('✅ LoL PUUID résolu');
+                return true;
+            } catch (err) {
+                console.error('❌ Échec résolution LoL PUUID (Riot):', err);
+                return false;
+            }
+        }
+
+        lolTierIconUrl(tierRaw, rankRoman) {
+            if (!tierRaw || typeof tierRaw !== 'string') {
+                return 'lol/images/Unrated.png';
+            }
+            const key = tierRaw.toUpperCase();
+            const files = {
+                IRON: 'Iron.png',
+                BRONZE: 'Bronze.png',
+                SILVER: 'Silver.png',
+                GOLD: 'Gold.png',
+                PLATINUM: 'Platinum.png',
+                EMERALD: 'Emerald.png',
+                DIAMOND: 'Diamond.png',
+                MASTER: 'Master.png',
+                GRANDMASTER: 'Grandmaster.png',
+                CHALLENGER: 'Challenger.png'
+            };
+            const file = files[key];
+            return file ? `lol/images/${file}` : 'lol/images/Unrated.png';
+        }
+
+        formatLolTierLabel(tierRaw, rankRoman) {
+            if (!tierRaw) return '—';
+            const cap = tierRaw.charAt(0) + tierRaw.slice(1).toLowerCase();
+            if (!rankRoman || /master|grandmaster|challenger/i.test(tierRaw)) {
+                return cap;
+            }
+            return `${cap} ${rankRoman}`;
+        }
+
+        formatLolTierNameOnly(tierRaw) {
+            if (!tierRaw) return '—';
+            return tierRaw.charAt(0) + tierRaw.slice(1).toLowerCase();
+        }
+
+        async fetchLolRankData() {
+            if (!this.riotApiKey || !this.lolPuuid) {
+                return false;
+            }
+            try {
+                const url = `https://${this.lolLeaguePlatform}.api.riotgames.com/lol/league/v4/entries/by-puuid/${encodeURIComponent(
+                    this.lolPuuid
+                )}?api_key=${encodeURIComponent(this.riotApiKey)}`;
+                const res = await fetch(url);
+                this._logRiotRateLimitFromResponse(res, 'lol/league/v4/entries/by-puuid');
+                if (!res.ok) {
+                }
+                const rows = await res.json();
+                if (this._gameSwitchGeneration !== this._fetchGenSnapshot) {
+                    return false;
+                }
+                if (!Array.isArray(rows)) {
+                    throw new Error('league-v4: réponse invalide');
+                }
+                let row = rows.find((r) => r && r.queueType === 'RANKED_SOLO_5x5');
+                if (!row) {
+                    row = rows.find((r) => r && r.queueType === 'RANKED_FLEX_SR');
+                }
+                if (!row) {
+                    this.lolRankData = {
+                        displayRank: 'Unranked',
+                        tierLabel: 'Unranked',
+                        lp: 0,
+                        tier: '',
+                        rankRoman: '',
+                        wins: 0,
+                        losses: 0,
+                        hasNoRank: true,
+                        tierIconUrl: 'lol/images/Unrated.png'
+                    };
+                    console.log('ℹ️ LoL: aucune file classée (solo/flex) sur ce compte');
+                    return true;
+                }
+                const tier = row.tier || '';
+                const rankRoman = row.rank || '';
+                const lp = typeof row.leaguePoints === 'number' ? row.leaguePoints : 0;
+                const wins = typeof row.wins === 'number' ? row.wins : 0;
+                const losses = typeof row.losses === 'number' ? row.losses : 0;
+                this.lolRankData = {
+                    displayRank: this.formatLolTierLabel(tier, rankRoman),
+                    tierLabel: this.formatLolTierNameOnly(tier),
+                    lp,
+                    tier,
+                    rankRoman,
+                    wins,
+                    losses,
+                    hasNoRank: false,
+                    tierIconUrl: this.lolTierIconUrl(tier, rankRoman)
+                };
+                console.log('✅ LoL rang:', this.lolRankData.displayRank, `${lp} LP`);
+                return true;
+            } catch (err) {
+                console.error('❌ fetchLolRankData:', err);
+                return false;
+            }
+        }
+
+        applyLolMatchHistoryToCards(entries) {
+            const track = document.getElementById('fuguHistoryTrackLol');
+            if (!track) return;
+            const cards = Array.from(track.querySelectorAll('.game-card'));
+            const ver = this.ddragonVersion;
+            entries.forEach((entry, i) => {
+                if (i >= cards.length) return;
+                const card = cards[i];
+                const mapEl = card.querySelector('.game-card__map');
+                const agentEl = card.querySelector('.game-card__agent');
+                if (mapEl) {
+                    mapEl.style.removeProperty('background-image');
+                }
+                const champ = entry.championName || 'Aatrox';
+                const ddragonChamp = `https://ddragon.leagueoflegends.com/cdn/${ver}/img/champion/${champ}.png`;
+                if (agentEl) {
+                    const ext = this.lolChampionImageExt || 'jpg';
+                    agentEl.src = `lol/champion/${champ}.${ext}`;
+                    agentEl.style.opacity = '1';
+                    agentEl.onerror = function handleLocalChampErr() {
+                        agentEl.onerror = function handleDdragonChampErr() {
+                            agentEl.onerror = null;
+                            agentEl.src = 'valo/images/no-rank.png';
+                        };
+                        agentEl.src = ddragonChamp;
+                    };
+                }
+                card.classList.remove('game-card--placeholder', 'game-card--win', 'game-card--loss');
+                card.classList.add('game-card--lol', entry.won ? 'game-card--win' : 'game-card--loss');
+            });
+            window.__overlayFuguMatchCount = entries.length;
+            if (typeof window.overlayFuguUpdateHistoryCount === 'function') {
+                window.overlayFuguUpdateHistoryCount();
+            }
+            this._lolLastEntries = entries.map((e) => ({ ...e }));
+            for (let i = 0; i < entries.length; i++) {
+                const e = entries[i];
+                if (e && e.matchId) {
+                    this._lolMatchCache.set(e.matchId, {
+                        won: !!e.won,
+                        championName: e.championName || 'Aatrox'
+                    });
+                }
+            }
+        }
+
+        async fetchLolMatchHistory() {
+            if (!this.riotApiKey || !this.lolPuuid || this.manualMode) {
+                return false;
+            }
+            try {
+                if (this._lolMatchCachePuuid !== this.lolPuuid) {
+                    this._lolMatchCache.clear();
+                    this._lolMatchCachePuuid = this.lolPuuid;
+                }
+
+                let listUrl = `https://${this.lolRegionalRoute}.api.riotgames.com/lol/match/v5/matches/by-puuid/${encodeURIComponent(
+                    this.lolPuuid
+                )}/ids?start=0&count=${this.lolMatchListCount}&api_key=${encodeURIComponent(this.riotApiKey)}`;
+                if (this.lolQueueFilter) {
+                    listUrl += `&queue=${encodeURIComponent(this.lolQueueFilter)}`;
+                }
+                const listRes = await fetch(listUrl);
+                this._logRiotRateLimitFromResponse(listRes, 'lol/match/v5/match-ids-by-puuid');
+                if (!listRes.ok) {
+                    throw new Error(`match-v5 ids HTTP ${listRes.status}`);
+                }
+                const ids = await listRes.json();
+                if (this._gameSwitchGeneration !== this._fetchGenSnapshot) {
+                    return false;
+                }
+                if (!Array.isArray(ids) || ids.length === 0) {
+                    console.log('⚠️ LoL: aucun match renvoyé');
+                    this.clearMatchHistoryCards('lol');
+                    this._lolMatchCache.clear();
+                    return true;
+                }
+
+                const idSet = new Set(ids);
+                for (const key of this._lolMatchCache.keys()) {
+                    if (!idSet.has(key)) {
+                        this._lolMatchCache.delete(key);
+                    }
+                }
+
+                const pid = this.lolPuuid;
+                const entries = [];
+                const baseMatch = `https://${this.lolRegionalRoute}.api.riotgames.com/lol/match/v5/matches`;
+                let cacheHits = 0;
+                let fetched = 0;
+
+                for (let i = 0; i < ids.length && entries.length < this.lolHistoryCardMax; i++) {
+                    const matchId = ids[i];
+                    let cached = this._lolMatchCache.get(matchId);
+                    if (cached) {
+                        cacheHits++;
+                        entries.push({
+                            matchId,
+                            won: cached.won,
+                            championName: cached.championName || 'Aatrox'
+                        });
+                        continue;
+                    }
+
+                    const mRes = await fetch(
+                        `${baseMatch}/${encodeURIComponent(matchId)}?api_key=${encodeURIComponent(this.riotApiKey)}`
+                    );
+                    this._logRiotRateLimitFromResponse(mRes, `lol/match/v5/matches/${matchId}`);
+                    if (!mRes.ok) {
+                        continue;
+                    }
+                    const match = await mRes.json();
+                    if (this._gameSwitchGeneration !== this._fetchGenSnapshot) {
+                        return false;
+                    }
+                    const parts = (match.info && match.info.participants) || [];
+                    const me = parts.find((p) => p && p.puuid === pid);
+                    if (!me) {
+                        continue;
+                    }
+                    const detail = {
+                        won: !!me.win,
+                        championName: me.championName || 'Aatrox'
+                    };
+                    this._lolMatchCache.set(matchId, detail);
+                    fetched++;
+                    entries.push({
+                        matchId,
+                        ...detail
+                    });
+                }
+                if (entries.length === 0) {
+                    console.log('⚠️ LoL: impossible de remplir l’historique (participants)');
+                    this.clearMatchHistoryCards('lol');
+                    return true;
+                }
+                if (this._gameSwitchGeneration !== this._fetchGenSnapshot) {
+                    return false;
+                }
+                this.applyLolMatchHistoryToCards(entries);
+                if (fetched > 0) {
+                    console.log(
+                        `✅ LoL historique: ${entries.length} parties (${cacheHits} cache, ${fetched} fetch match-v5)`
+                    );
+                } else {
+                    console.log(`✅ LoL historique: ${entries.length} parties (tout depuis cache)`);
+                }
+                return true;
+            } catch (err) {
+                console.error('❌ fetchLolMatchHistory:', err);
+                return false;
+            }
+        }
+
+        async init() {
+            console.log('🎮 Initialisation du widget Valorant avec système de commandes...');
+
+            // Log current user lists
+            console.log('👑 Modérateurs:', this.moderators);
+            console.log('⭐ VIPs:', this.vips);
+            console.log('🚫 Blacklist:', this.blacklist);
+
+            this.applyGameShell(this.activeGame);
+
+            // Check for manual mode first
+            const isManualMode = this.checkManualMode();
+
+            if (!isManualMode && this.autoGameFromCategory && this.twitchClientId && this.twitchAccessToken) {
+                console.log(
+                    `📺 auto_game: sync catégorie Twitch #${this.twitchChannel} (poll ${Math.round(this.twitchCategoryPollMs / 1000)}s)`
+                );
+                await this.syncActiveGameFromTwitchCategory();
+            } else if (!isManualMode && this.autoGameFromCategory) {
+                console.warn(
+                    '📺 auto_game=1 mais twitch_client_id ou twitch_access_token manquant — ignoré jusqu’à ce que tu les passes en query string.'
+                );
+            }
+
+            if (!isManualMode && this.activeGame === 'valo') {
+                await this.ensurePuuid();
+            }
+            console.log(
+                `👤 Valorant PUUID: ${this.puuid || '(aucun)'} | LoL PUUID: ${this.lolPuuid || '(aucun / résolution au refresh)'} | Jeu: ${this.activeGame} | mode overlay: ${this.overlayMode}` +
+                    (this.autoGameFromCategory ? ` | auto_game: Twitch Helix` : '')
+            );
+
+            if (!isManualMode) {
+                this.setDataPanelVisible(false);
+                if (this.activeGame === 'valo') {
+                    await this.loadRankData();
+                    if (this.leaderboardEnabled) {
+                        await this.loadLeaderboardData();
+                    } else {
+                        this.currentLeaderboardData = null;
+                        console.log('ℹ️ API leaderboard Henrik désactivée (?leaderboard=true pour activer)');
+                    }
+                } else {
+                    this.currentLeaderboardData = null;
+                    console.log(
+                        this.overlayMode === 'rank'
+                            ? 'ℹ️ Mode LoL — league-v4 (Riot) uniquement (?mode=normal pour match-v5).'
+                            : 'ℹ️ Mode LoL — league-v4 + match-v5 (Riot), pas de Henrik.'
+                    );
+                }
+
+                console.log('🧪 Refresh APIs…');
+                await this.fetchBothAPIs();
+
+                if (this.activeGame === 'valo') {
+                    const sec = Math.round(this.updateInterval / 1000);
+                    if (this.overlayMode === 'rank') {
+                        const mR = Math.round(60000 / this.updateInterval);
+                        console.log(
+                            `⏰ Mise à jour auto Valorant toutes les ${sec} s (~${mR} req/min Henrik pour MMR seulement` +
+                                (this.leaderboardEnabled ? ' ; + leaderboard si Immortal+' : '') +
+                                ')'
+                        );
+                    } else {
+                        console.log(
+                            `⏰ Mise à jour auto APIs toutes les ${sec} s (~${Math.round((60000 / this.updateInterval) * 2)} req/min Henrik pour MMR + historique` +
+                                (this.leaderboardEnabled ? ' ; + leaderboard si Immortal+' : '') +
+                                ')'
+                        );
+                    }
+                } else {
+                    const sec = Math.round(this.updateInterval / 1000);
+                    if (this.overlayMode === 'rank') {
+                        console.log(
+                            `⏰ Mise à jour auto LoL (Riot) toutes les ${sec} s — league-v4 seulement (pas de match-v5)`
+                        );
+                    } else {
+                        console.log(`⏰ Mise à jour auto LoL (Riot) toutes les ${sec} s`);
+                    }
+                }
+
+                setInterval(async () => {
+                    if (!this.manualMode) {
+                        await this.fetchBothAPIs({ background: true });
+                    }
+                }, this.updateInterval);
+
+                if (this.autoGameFromCategory && this.twitchClientId && this.twitchAccessToken) {
+                    setInterval(async () => {
+                        if (!this.manualMode) {
+                            await this.syncActiveGameFromTwitchCategory();
+                        }
+                    }, this.twitchCategoryPollMs);
+                }
+            } else {
+                this.setDataPanelVisible(true);
+                this.displayCurrentRank();
+                this.displayLeaderboardPosition();
+            }
+
+            // Connexion au chat Twitch pour écouter les commandes
+            this.connectToTwitchChat();
+
+            // Mise à jour périodique de l'affichage (juste au cas où)
+            setInterval(() => {
+                if (!this.isAnimating && !this.isPositionAnimating) {
+                    if (this.activeGame === 'valo') {
+                        this.displayCurrentRank();
+                        this.displayLeaderboardPosition();
+                    } else if (this.activeGame === 'lol') {
+                        this.displayCurrentRank();
+                    }
+                }
+            }, 30000); // Toutes les 30 secondes
+        }
+
+        async loadRankData() {
+            try {
+                const savedData = localStorage.getItem(`valorant-rank-data-${this.puuid}`);
+                if (savedData) {
+                    const loadedData = JSON.parse(savedData);
+                    this.currentRankData = {
+                        rank: loadedData.rank,
+                        rr: loadedData.rr,
+                        tier: loadedData.tier
+                    };
+                    this.previousRR = loadedData.rr;
+                    this.lastChange = loadedData.lastChange || null;
+                    console.log('✅ Données de rang chargées depuis localStorage:', this.currentRankData);
+                    return true; // Indicate we have saved data
+                } else {
+                    console.log('📄 Aucune donnée sauvegardée trouvée, utilisation des données par défaut temporaires');
+                    this.previousRR = this.currentRankData.rr;
+                    return false; // Indicate no saved data
+                }
+            } catch (error) {
+                console.log('📄 Impossible de charger les données sauvegardées, utilisation des données par défaut temporaires');
+                this.previousRR = this.currentRankData.rr;
+                return false; // Indicate no saved data
+            }
+        }
+
+        async saveRankData() {
+            try {
+                const dataToSave = {
+                    rank: this.currentRankData.rank,
+                    rr: this.currentRankData.rr,
+                    tier: this.currentRankData.tier,
+                    lastChange: this.lastChange,
+                    lastUpdated: new Date().toISOString()
+                };
+
+                // Sauvegarder dans localStorage
+                localStorage.setItem(`valorant-rank-data-${this.puuid}`, JSON.stringify(dataToSave));
+
+                console.log('💾 Données de rang sauvegardées dans localStorage:', dataToSave);
+            } catch (error) {
+                console.error('❌ Erreur lors de la sauvegarde:', error);
+            }
+        }
+
+        async loadLeaderboardData() {
+            if (!this.leaderboardEnabled) {
+                return false;
+            }
+            try {
+                const savedData = localStorage.getItem(`valorant-leaderboard-${this.puuid}`);
+                if (savedData) {
+                    const loadedData = JSON.parse(savedData);
+
+                    // Vérifier immédiatement si le joueur est encore dans le leaderboard
+                    // Si le rang actuel est trop bas, ne pas charger les données
+                    if (this.currentRankData && (this.currentRankData.tier < 24 || this.currentRankData.hasNoRank)) {
+                        const reason = this.currentRankData.hasNoRank ? 'pas de rang' : `rang trop bas (tier ${this.currentRankData.tier})`;
+                        console.log(`❌ ${reason}, suppression des anciennes données`);
+                        this.currentLeaderboardData = null;
+                        this.displayLeaderboardPosition(); // Cache immédiatement
+                        return false;
+                    }
+
+                    this.currentLeaderboardData = loadedData.playerData;
+                    this.previousPosition = loadedData.position;
+                    console.log('✅ Données du leaderboard chargées depuis localStorage:', this.currentLeaderboardData);
+                    return true;
+                }
+            } catch (error) {
+                console.log('📄 Impossible de charger les données du leaderboard sauvegardées');
+            }
+            return false;
+        }
+
+        async saveLeaderboardData() {
+            if (!this.leaderboardEnabled) {
+                return;
+            }
+            try {
+                const dataToSave = {
+                    playerData: this.currentLeaderboardData,
+                    position: this.currentLeaderboardData ? this.currentLeaderboardData.leaderboard_rank : null,
+                    lastUpdated: new Date().toISOString()
+                };
+
+                localStorage.setItem(`valorant-leaderboard-${this.puuid}`, JSON.stringify(dataToSave));
+                console.log('💾 Données du leaderboard sauvegardées');
+            } catch (error) {
+                console.error('❌ Erreur lors de la sauvegarde du leaderboard:', error);
+            }
+        }
+
+        connectToTwitchChat() {
+            console.log('🔗 Connexion au chat Twitch pour écouter les commandes...');
+
+            // Connexion WebSocket au chat IRC de Twitch
+            const socket = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+
+            socket.onopen = () => {
+                console.log('✅ Connecté au chat Twitch #' + this.twitchChannel);
+                // Connexion anonyme au chat IRC de Twitch avec support des tags
+                socket.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
+                socket.send('PASS SCHMOOPIIE');
+                socket.send('NICK justinfan12345'); // Utilisateur anonyme
+                socket.send('JOIN #' + this.twitchChannel);
+            };
+
+            socket.onmessage = (event) => {
+                const message = event.data;
+
+                // Répondre aux PING pour maintenir la connexion
+                if (message.startsWith('PING')) {
+                    socket.send('PONG :tmi.twitch.tv');
+                    return;
+                }
+
+                // Parse chat messages for commands
+                this.parseChatMessage(message);
+            };
+
+            socket.onerror = (error) => {
+                console.error('❌ Erreur de connexion au chat Twitch:', error);
+            };
+
+            socket.onclose = () => {
+                console.log('🔌 Connexion au chat Twitch fermée');
+                // Tentative de reconnexion après 10 secondes
+                setTimeout(() => {
+                    console.log('🔄 Tentative de reconnexion...');
+                    this.connectToTwitchChat();
+                }, 10000);
+            };
+        }
+
+        // Parse incoming chat messages
+        parseChatMessage(rawMessage) {
+            try {
+                const chan = this.twitchChannel;
+                const privToken = 'PRIVMSG #' + chan + ' :';
+                if (!rawMessage.includes(privToken)) {
+                    return;
+                }
+
+                const tagsMatch = rawMessage.match(/@([^ ]+) /);
+                let userTags = '';
+                if (tagsMatch) {
+                    userTags = tagsMatch[1];
+                }
+
+                const userMatch = rawMessage.match(/:([^!]+)!/);
+                if (!userMatch) return;
+                const username = userMatch[1].toLowerCase();
+
+                const escaped = chan.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const messageMatch = rawMessage.match(
+                    new RegExp('PRIVMSG #' + escaped + ' :(.+)')
+                );
+                if (!messageMatch) return;
+                const messageContent = messageMatch[1].trim();
+
+                console.log(`💬 Message de ${username}: ${messageContent}`);
+
+                // Check if it's a command
+                if (messageContent.startsWith('!')) {
+                    this.parseChatCommand(username, messageContent, userTags);
+                }
+
+            } catch (error) {
+                console.error('❌ Erreur lors du parsing du message:', error);
+            }
+        }
+
+        updateRankImage() {
+            this.updateValoRankIcon();
+            this.updateLolRankIcon();
+        }
+
+        updateValoRankIcon() {
+            const imgEl = document.querySelector('.fugu-rank__icon--valo');
+            if (!imgEl) return;
+
+            const data = this.currentRankData;
+            if (!data || data.hasNoRank || data.tier === 0 || data.rank === 'No Rank' || data.rank === 'No rank') {
+                imgEl.src = 'valo/images/no-rank.png';
+                imgEl.alt = 'No Rank';
+                imgEl.onerror = null;
+                console.log('🖼️ Valorant icon: no-rank.png');
+                return;
+            }
+
+            const rankImagePath = this.rankImages[data.tier];
+            if (rankImagePath) {
+                imgEl.src = rankImagePath;
+                imgEl.alt = data.rank;
+                imgEl.onerror = null;
+                console.log(`🖼️ Valorant icon: ${rankImagePath} (${data.rank})`);
+            } else {
+                imgEl.removeAttribute('src');
+                imgEl.alt = data.rank || '';
+                console.log(`⚠️ Pas d'image Valorant pour le rang ${data.tier}`);
+            }
+        }
+
+        updateLolRankIcon() {
+            const imgEl = document.querySelector('.fugu-rank__icon--lol');
+            if (!imgEl) return;
+
+            const d = this.lolRankData;
+            if (!d || d.hasNoRank) {
+                imgEl.src = 'lol/images/Unrated.png';
+                imgEl.alt = 'Unranked';
+                imgEl.onerror = () => {
+                    imgEl.onerror = null;
+                    imgEl.src = 'valo/images/no-rank.png';
+                };
+                console.log('🖼️ LoL icon: unrated');
+                return;
+            }
+            imgEl.src = d.tierIconUrl;
+            imgEl.alt = d.displayRank || '';
+            imgEl.onerror = () => {
+                imgEl.onerror = () => {
+                    imgEl.onerror = null;
+                    imgEl.src = 'valo/images/no-rank.png';
+                };
+                imgEl.src = 'lol/images/Unrated.png';
+            };
+            console.log(`🖼️ LoL icon: ${d.tierIconUrl}`);
+        }
+
+        displayCurrentRank() {
+            const rrDisplay = document.getElementById('rrDisplay');
+            const imgValo = document.querySelector('.fugu-rank__icon--valo');
+            const imgLol = document.querySelector('.fugu-rank__icon--lol');
+            const nameEl = document.querySelector('.fugu-rank__name');
+            const divEl = document.getElementById('lolDivisionDisplay');
+
+            if (this.activeGame === 'lol') {
+                const d = this.lolRankData;
+                if (nameEl) {
+                    nameEl.textContent = (d && (d.tierLabel || d.displayRank)) || '—';
+                }
+                if (!d || d.hasNoRank) {
+                    if (divEl) {
+                        divEl.textContent = '';
+                        divEl.style.display = 'none';
+                    }
+                    if (imgLol) {
+                        imgLol.src = 'lol/images/Unrated.png';
+                        imgLol.alt = 'Unranked';
+                        imgLol.onerror = () => {
+                            imgLol.onerror = null;
+                            imgLol.src = 'valo/images/no-rank.png';
+                        };
+                    }
+                    if (rrDisplay) {
+                        rrDisplay.textContent = '';
+                        rrDisplay.style.display = 'none';
+                    }
+                    console.log('✅ Affichage LoL: Unranked');
+                    return;
+                }
+                const isApex = /master|grandmaster|challenger/i.test(d.tier || '');
+                if (divEl) {
+                    if (!isApex && d.rankRoman) {
+                        divEl.textContent = `Division ${d.rankRoman}`;
+                        divEl.style.display = 'block';
+                    } else {
+                        divEl.textContent = '';
+                        divEl.style.display = 'none';
+                    }
+                }
+                if (rrDisplay) {
+                    rrDisplay.style.display = 'inline-block';
+                    if (!this.isAnimating) {
+                        rrDisplay.textContent = `${d.lp} LP`;
+                    }
+                }
+                if (imgLol && d.tierIconUrl) {
+                    imgLol.src = d.tierIconUrl;
+                    imgLol.alt = d.displayRank || '';
+                    imgLol.onerror = () => {
+                        imgLol.onerror = () => {
+                            imgLol.onerror = null;
+                            imgLol.src = 'valo/images/no-rank.png';
+                        };
+                        imgLol.src = 'lol/images/Unrated.png';
+                    };
+                }
+                console.log(`✅ Affichage LoL: ${d.displayRank} — ${d.lp} LP`);
+                return;
+            }
+
+            if (divEl) {
+                divEl.textContent = '';
+                divEl.style.display = 'none';
+            }
+
+            const data = this.currentRankData;
+
+            if (nameEl) {
+                nameEl.textContent = data.rank || '';
+            }
+
+            if (data.hasNoRank || data.tier === 0 || data.rank === 'No Rank' || data.rank === 'No rank') {
+                if (imgValo) {
+                    imgValo.src = 'valo/images/no-rank.png';
+                    imgValo.alt = 'No Rank';
+                    imgValo.onerror = null;
+                }
+                if (rrDisplay) {
+                    rrDisplay.textContent = '';
+                    rrDisplay.style.display = 'none';
+                }
+                console.log('✅ Affichage: No Rank');
+                return;
+            }
+
+            if (rrDisplay) {
+                rrDisplay.style.display = 'inline-block';
+            }
+
+            if (imgValo) {
+                const rankImagePath = this.rankImages[data.tier];
+                if (rankImagePath) {
+                    imgValo.src = rankImagePath;
+                    imgValo.alt = data.rank;
+                    imgValo.onerror = null;
+                }
+            }
+
+            if (!this.isAnimating && rrDisplay) {
+                rrDisplay.textContent = `${data.rr} RR`;
+            }
+
+            console.log(`✅ Affichage: ${data.rank} - ${data.rr} RR`);
+        }
+
+        async animateRRChange(oldRR, newRR, changeValue = null) {
+            if (this.isAnimating) return;
+            if (this.activeGame === 'lol') {
+                this.displayCurrentRank();
+                return;
+            }
+
+            // Check if player has no rank - don't animate if no rank
+            const data = this.currentRankData;
+            if (data.hasNoRank || data.tier === 0 || data.rank === 'No Rank' || data.rank === 'No rank' || newRR === 0) {
+                const rrDisplay = document.getElementById('rrDisplay');
+                rrDisplay.textContent = '';
+                rrDisplay.style.display = 'none';
+                return;
+            }
+
+            this.isAnimating = true;
+
+            const rrDisplay = document.getElementById('rrDisplay');
+
+            // Ensure RR display is visible
+            rrDisplay.style.display = 'block';
+
+            // Show change indicator if we have a change value and it's different from last time
+            if (changeValue !== null && changeValue !== this.lastChange) {
+                this.showChangeIndicator(changeValue);
+                this.lastChange = changeValue;
+            }
+
+            // Animate RR counting
+            const difference = newRR - oldRR;
+            const steps = Math.min(Math.abs(difference), 50); // Limit steps for very large changes
+            const stepSize = difference / steps;
+            const stepDelay = 30; // ms between each step
+
+            for (let i = 0; i <= steps; i++) {
+                const currentRR = Math.round(oldRR + (stepSize * i));
+                rrDisplay.textContent = `${currentRR} RR`;
+
+                if (i < steps) {
+                    await new Promise(resolve => setTimeout(resolve, stepDelay));
+                }
+            }
+
+            this.isAnimating = false;
+        }
+
+        displayLeaderboardPosition() {
+            const leaderboardElement = document.getElementById('leaderboardPosition');
+
+            if (!this.currentLeaderboardData) {
+                // Hide the leaderboard position if no data
+                leaderboardElement.style.display = 'none';
+                return;
+            }
+
+            // Show the leaderboard position if we have data
+            leaderboardElement.style.display = 'block';
+
+            // Update position display without animation if not animating
+            if (!this.isPositionAnimating) {
+                // Add ~ prefix if it's an estimated position
+                const prefix = this.currentLeaderboardData.estimated ? '~#' : '#';
+                leaderboardElement.textContent = `${prefix}${this.currentLeaderboardData.leaderboard_rank.toLocaleString()}`;
+            }
+
+            const estimatedText = this.currentLeaderboardData.estimated ? ' (estimé)' : '';
+            console.log(`✅ Position leaderboard affichée: ~#${this.currentLeaderboardData.leaderboard_rank}${estimatedText}`);
+        }
+
+        async animatePositionChange(oldPosition, newPosition) {
+            if (this.isPositionAnimating) return;
+            this.isPositionAnimating = true;
+
+            const leaderboardElement = document.getElementById('leaderboardPosition');
+
+            // Calculate animation parameters
+            const difference = newPosition - oldPosition;
+            const steps = Math.min(Math.abs(difference), 100); // Limit steps for very large changes
+            const stepSize = difference / steps;
+            const stepDelay = 20; // ms between each step
+
+            console.log(`🎬 Animating position from ${oldPosition} to ${newPosition} in ${steps} steps`);
+
+            // Animate position counting
+            for (let i = 0; i <= steps; i++) {
+                const currentPosition = Math.round(oldPosition + (stepSize * i));
+                // Add ~ prefix if it's an estimated position
+                const prefix = this.currentLeaderboardData && this.currentLeaderboardData.estimated ? '~#' : '#';
+                leaderboardElement.textContent = `${prefix}${currentPosition.toLocaleString()}`;
+
+                if (i < steps) {
+                    await new Promise(resolve => setTimeout(resolve, stepDelay));
+                }
+            }
+
+            // Show change indicator after animation completes
+            this.showPositionChangeIndicator(oldPosition, newPosition);
+
+            this.isPositionAnimating = false;
+        }
+
+        showPositionChangeIndicator(oldPosition, newPosition) {
+            const leaderboardElement = document.getElementById('leaderboardPosition');
+
+            // Remove any existing change indicator
+            const existingIndicator = leaderboardElement.querySelector('.position-change');
+            if (existingIndicator) {
+                existingIndicator.remove();
+            }
+
+            const change = oldPosition - newPosition; // Positive = moved up, negative = moved down
+            const changeElement = document.createElement('div');
+
+            if (change > 0) {
+                changeElement.className = 'position-change up';
+                changeElement.textContent = `↑${change}`;
+            } else {
+                changeElement.className = 'position-change down';
+                changeElement.textContent = `↓${Math.abs(change)}`;
+            }
+
+            leaderboardElement.appendChild(changeElement);
+
+            // Remove the indicator after animation completes
+            setTimeout(() => {
+                if (changeElement.parentNode) {
+                    changeElement.remove();
+                }
+            }, 3000);
+
+            console.log(`📈 Changement de position: #${oldPosition} → #${newPosition} (${change > 0 ? '+' : ''}${change})`);
+        }
+
+        async fetchBothAPIs(options = {}) {
+            const background = options.background === true;
+            const fromSwitch = options.fromSwitch === true;
+
+            if (this.manualMode) {
+                console.log('🎮 Mode manuel activé - Ignorant les appels API (manualMode:', this.manualMode, ')');
+                return;
+            }
+            if (this._fetchBothBusy) {
+                if (!background) {
+                    console.log('⏭️ fetchBothAPIs ignoré: cycle précédent encore en cours');
+                }
+                return;
+            }
+
+            if (fromSwitch) {
+                if (this.activeGame === 'lol' && this._lolSnapshot) {
+                    this._restoreLolFromSnapshot();
+                    this.setDataPanelVisible(true);
+                    return;
+                }
+                if (this.activeGame === 'valo' && this._valoSnapshot) {
+                    this._restoreValoFromSnapshot();
+                    this.setDataPanelVisible(true);
+                    return;
+                }
+            }
+
+            const genAtStart = this._gameSwitchGeneration;
+            this._fetchBothBusy = true;
+            this._fetchGenSnapshot = genAtStart;
+            try {
+                if (this.activeGame === 'lol') {
+                    if (!background) {
+                        this.setDataPanelVisible(false);
+                    }
+                    await this.ensureLolPuuid();
+                    if (this._gameSwitchGeneration !== genAtStart) {
+                        return;
+                    }
+                    if (!this.riotApiKey) {
+                        console.warn('⚠️ LoL: ?riot_api_key= manquant — impossible d’appeler Riot.');
+                        if (!background) {
+                            this.setDataPanelVisible(false);
+                        }
+                        return;
+                    }
+                    if (!this.lolPuuid) {
+                        console.warn('⚠️ LoL: PUUID introuvable — ?lol_puuid= ou ?lol_name=&lol_tag=.');
+                        if (!background) {
+                            this.setDataPanelVisible(false);
+                        }
+                        return;
+                    }
+                    console.log(
+                        this.overlayMode === 'rank'
+                            ? '🔄 LoL (mode rank): league v4 uniquement — pas de match-v5.'
+                            : '🔄 LoL: league v4 + match v5…'
+                    );
+                    const rankOk = await this.fetchLolRankData();
+                    if (this._gameSwitchGeneration !== genAtStart) {
+                        return;
+                    }
+                    let histOk = true;
+                    if (this.overlayMode !== 'rank') {
+                        histOk = await this.fetchLolMatchHistory();
+                    }
+                    if (this._gameSwitchGeneration !== genAtStart) {
+                        return;
+                    }
+                    this.currentLeaderboardData = null;
+                    this.displayLeaderboardPosition();
+                    this.displayCurrentRank();
+                    if (!background && rankOk && histOk) {
+                        this.setDataPanelVisible(true);
+                    }
+                    return;
+                }
+
+                await this.ensurePuuid();
+                if (this._gameSwitchGeneration !== genAtStart) {
+                    return;
+                }
+                if (!this.puuid) {
+                    console.warn('⚠️ fetchBothAPIs: toujours pas de PUUID — vérifiez l’URL (?puuid= ou ?name=&tag=).');
+                    if (!background) {
+                        this.setDataPanelVisible(false);
+                    }
+                    return;
+                }
+
+                if (!background) {
+                    this.setDataPanelVisible(false);
+                }
+
+                console.log(
+                    this.overlayMode === 'rank'
+                        ? '🔄 Valorant (mode rank): MMR Henrik uniquement — pas d’historique competitive.'
+                        : '🔄 Début de la mise à jour des deux APIs...'
+                );
+
+                const rankOk = await this.fetchRealRankData();
+                if (this._gameSwitchGeneration !== genAtStart) {
+                    return;
+                }
+                let histOk = true;
+                if (this.overlayMode !== 'rank') {
+                    histOk = await this.fetchCompetitiveMatchHistory();
+                }
+                if (this._gameSwitchGeneration !== genAtStart) {
+                    return;
+                }
+
+                if (!rankOk || !histOk) {
+                    if (!background) {
+                        this.setDataPanelVisible(false);
+                    }
+                    return;
+                }
+
+                if (!this.leaderboardEnabled) {
+                    this.currentLeaderboardData = null;
+                    this.displayLeaderboardPosition();
+                    if (!background) {
+                        this.setDataPanelVisible(true);
+                    }
+                    return;
+                }
+
+                if (this.currentRankData && (this.currentRankData.tier < 24 || this.currentRankData.hasNoRank)) {
+                    const reason = this.currentRankData.hasNoRank
+                        ? 'pas de rang'
+                        : `rang trop bas (tier ${this.currentRankData.tier})`;
+                    console.log(`❌ ${reason}, pas besoin de chercher dans le leaderboard`);
+                    this.currentLeaderboardData = null;
+                    this.displayLeaderboardPosition();
+                    if (!background) {
+                        this.setDataPanelVisible(true);
+                    }
+                    return;
+                }
+
+                if (!background) {
+                    this.setDataPanelVisible(true);
+                }
+
+                const lbGen = this._gameSwitchGeneration;
+                setTimeout(async () => {
+                    if (this._gameSwitchGeneration !== lbGen) {
+                        return;
+                    }
+                    await this.fetchLeaderboardData();
+                }, 2000);
+            } finally {
+                if (this._gameSwitchGeneration === genAtStart) {
+                    this._fetchBothBusy = false;
+                }
+            }
+        }
+
+        async fetchLeaderboardData() {
+            try {
+                if (!this.leaderboardEnabled) {
+                    return;
+                }
+                if (this.activeGame !== 'valo') {
+                    return;
+                }
+                console.log('🏆 Début de la recherche dans le leaderboard...');
+
+                // Check if player is high enough rank to be on leaderboard (Immortal 1+ = tier 24+)
+                const currentTier = this.currentRankData.tier;
+                if (currentTier < 24 || this.currentRankData.hasNoRank) {
+                    const reason = this.currentRankData.hasNoRank ? 'pas de rang' : `rang trop bas (tier ${currentTier}), minimum Immortal 1 (tier 24)`;
+                    console.log(`❌ ${reason}`);
+                    this.currentLeaderboardData = null;
+                    this.displayLeaderboardPosition();
+                    return;
+                }
+
+                const apiUrl = `https://api.henrikdev.xyz/valorant/v3/leaderboard/${this.region}/${this.platform}?size=15000&api_key=${this.apiKey}`;
+                console.log('🌐 URL API Leaderboard:', apiUrl);
+
+                console.log('📡 Envoi de la requête vers l\'API Leaderboard...');
+                const response = await fetch(apiUrl);
+
+                console.log('📋 Statut de la réponse Leaderboard:', response.status, response.statusText);
+
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP: ${response.status} - ${response.statusText}`);
+                }
+
+                console.log('📦 Parsing du JSON Leaderboard...');
+                const json = await response.json();
+                console.log('📄 Réponse de l\'API Leaderboard reçue, calcul de la position approximative...');
+
+                if (this.activeGame !== 'valo') {
+                    return;
+                }
+
+                if (!json.data || !json.data.players || !Array.isArray(json.data.players)) {
+                    throw new Error('Format de données invalide reçu de l\'API Leaderboard');
+                }
+
+                // Use RR to estimate position instead of searching by name
+                const currentRR = this.currentRankData.rr;
+
+                console.log(`🔍 Estimation de la position pour ${currentRR} RR (tier ${currentTier})...`);
+
+                // Find approximate position based on RR
+                let estimatedPosition = this.estimatePositionFromRR(json.data.players, currentRR, currentTier);
+
+                if (!estimatedPosition) {
+                    console.log(`❌ Impossible d'estimer la position pour ${currentRR} RR`);
+                    // Keep existing leaderboard data if available
+                    if (this.currentLeaderboardData) {
+                        console.log(`✅ Conservation de la position leaderboard existante: #${this.currentLeaderboardData.leaderboard_rank}`);
+                        this.displayLeaderboardPosition();
+                    } else {
+                        this.currentLeaderboardData = null;
+                        this.displayLeaderboardPosition();
+                    }
+                    return;
+                }
+
+                console.log(`🎯 Position estimée: ~#${estimatedPosition} pour ${currentRR} RR`);
+
+                // Create fake leaderboard data with estimated position
+                const estimatedLeaderboardData = {
+                    leaderboard_rank: estimatedPosition,
+                    rr: currentRR,
+                    tier: currentTier,
+                    puuid: this.puuid,
+                    estimated: true // Flag to show it's estimated
+                };
+
+                // Check for position change
+                const oldPosition = this.currentLeaderboardData ? this.currentLeaderboardData.leaderboard_rank : null;
+                const newPosition = estimatedPosition;
+
+                this.currentLeaderboardData = estimatedLeaderboardData;
+
+                // If position changed, animate the change
+                if (oldPosition !== null && oldPosition !== newPosition) {
+                    console.log(`🎬 Animation position leaderboard: ${oldPosition} → ~${newPosition}`);
+                    await this.animatePositionChange(oldPosition, newPosition);
+                } else {
+                    // Just update the display without animation
+                    this.displayLeaderboardPosition();
+                }
+
+                this.previousPosition = newPosition;
+                await this.saveLeaderboardData();
+
+                console.log('🎉 Mise à jour du leaderboard (estimé) terminée avec succès!');
+
+            } catch (error) {
+                console.error('❌ Erreur dans fetchLeaderboardData:', error);
+                console.log('⚠️ Erreur lors de la récupération du leaderboard - Conservation des données existantes');
+
+                // Keep existing leaderboard data if available, don't clear it
+                if (this.currentLeaderboardData) {
+                    console.log(`✅ Conservation de la position leaderboard existante: #${this.currentLeaderboardData.leaderboard_rank}`);
+                    // Just refresh the display with existing data
+                    this.displayLeaderboardPosition();
+                } else {
+                    // Only clear if we never had data
+                    console.log('⚠️ Aucune donnée leaderboard existante à conserver');
+                    this.currentLeaderboardData = null;
+                    this.displayLeaderboardPosition();
+                }
+            }
+        }
+
+        estimatePositionFromRR(players, targetRR, targetTier) {
+            console.log(`🔍 Debug: Recherche pour ${targetRR} RR exact (tier ${targetTier})`);
+
+            // Filter players with the same tier or higher
+            const relevantPlayers = players.filter(player => {
+                // For same tier, use EXACT RR comparison
+                if (player.tier === targetTier) {
+                    return player.rr >= targetRR;
+                }
+                // For higher tiers, include all
+                return player.tier > targetTier;
+            });
+
+            console.log(`🔍 Debug: ${relevantPlayers.length} joueurs trouvés avec RR >= ${targetRR} ou tier supérieur`);
+
+            // If ALL players have higher RR (but we need to check for equal RR too)
+            const playersWithHigherRR = players.filter(player => {
+                if (player.tier === targetTier) {
+                    return player.rr > targetRR;
+                }
+                return player.tier > targetTier;
+            });
+
+            // If ALL 15,000 players have STRICTLY higher RR, the player is not in leaderboard
+            if (playersWithHigherRR.length >= players.length) {
+                console.log(`❌ Debug: Tous les ${players.length} joueurs du leaderboard ont un RR strictement supérieur`);
+                console.log(`❌ Debug: Le joueur avec ${targetRR} RR n'est pas dans le top ${players.length}`);
+                return null; // Player not in leaderboard
+            }
+
+            // If we have players with higher or equal RR in same tier, or higher tiers
+            if (relevantPlayers.length > 0) {
+                // Find the BEST position (lowest rank number) among players with same/higher RR
+                const bestPosition = Math.min(...relevantPlayers.map(player => player.leaderboard_rank));
+
+                // For same RR, take the best position; for higher RR, estimate one position after
+                const playersWithExactSameRR = relevantPlayers.filter(player =>
+                    player.tier === targetTier && player.rr === targetRR
+                );
+
+                console.log(`🔍 Debug: ${playersWithExactSameRR.length} joueurs avec exactement ${targetRR} RR`);
+
+                if (playersWithExactSameRR.length > 0) {
+                    // Take the MIDDLE position among players with exact same RR
+                    const positions = playersWithExactSameRR.map(player => player.leaderboard_rank).sort((a, b) => a - b);
+                    const highestRank = positions[0]; // Best position (lowest number)
+                    const lowestRank = positions[positions.length - 1]; // Worst position (highest number)
+                    const middlePosition = Math.round((highestRank + lowestRank) / 2);
+
+                    console.log(`🎯 Debug: ${playersWithExactSameRR.length} joueurs avec ${targetRR} RR - Positions: #${highestRank} à #${lowestRank}`);
+                    console.log(`🎯 Debug: Position du milieu calculée: #${middlePosition}`);
+                    return middlePosition;
+                } else {
+                    // Calculate how many players would be ahead of us
+                    const playersAhead = relevantPlayers.length;
+                    const estimatedPosition = playersAhead + 1;
+
+                    // Check if this position would be outside the leaderboard
+                    if (estimatedPosition > players.length) {
+                        console.log(`❌ Debug: Position estimée ${estimatedPosition} > taille leaderboard ${players.length}`);
+                        return null; // Player not in leaderboard
+                    }
+
+                    console.log(`🎯 Debug: Position estimée basée sur ${playersAhead} joueurs devant: #${estimatedPosition}`);
+                    return estimatedPosition;
+                }
+            }
+
+            // If no players found with higher RR/tier, estimate based on pattern
+            // Find players in the same tier
+            const sameTierPlayers = players.filter(player => player.tier === targetTier);
+            console.log(`🔍 Debug: ${sameTierPlayers.length} joueurs dans le même tier ${targetTier}`);
+
+            if (sameTierPlayers.length > 0) {
+                // Sort by RR descending, then by rank ascending (best rank first)
+                sameTierPlayers.sort((a, b) => {
+                    if (b.rr !== a.rr) return b.rr - a.rr; // Higher RR first
+                    return a.leaderboard_rank - b.leaderboard_rank; // Better rank first for same RR
+                });
+
+                // Log some sample players for debugging
+                console.log(`🔍 Debug: Premiers joueurs du tier:`, sameTierPlayers.slice(0, 5).map(p => `${p.rr}RR #${p.leaderboard_rank}`));
+                console.log(`🔍 Debug: Derniers joueurs du tier:`, sameTierPlayers.slice(-5).map(p => `${p.rr}RR #${p.leaderboard_rank}`));
+
+                // Find where our RR would fit
+                for (let i = 0; i < sameTierPlayers.length; i++) {
+                    if (targetRR >= sameTierPlayers[i].rr) {
+                        if (targetRR === sameTierPlayers[i].rr) {
+                            // Same RR - take the MIDDLE position among players with this RR
+                            const sameRRPlayers = sameTierPlayers.filter(p => p.rr === targetRR);
+                            const positions = sameRRPlayers.map(p => p.leaderboard_rank).sort((a, b) => a - b);
+                            const highestRank = positions[0]; // Best position (lowest number)
+                            const lowestRank = positions[positions.length - 1]; // Worst position (highest number)
+                            const middlePosition = Math.round((highestRank + lowestRank) / 2);
+
+                            console.log(`🎯 Debug: ${sameRRPlayers.length} joueurs avec ${targetRR} RR - Positions: #${highestRank} à #${lowestRank}`);
+                            console.log(`🎯 Debug: Position du milieu pour RR identique: #${middlePosition}`);
+                            return middlePosition;
+                        } else {
+                            // Higher RR - estimate position just before this player
+                            const position = Math.max(1, sameTierPlayers[i].leaderboard_rank - 1);
+                            console.log(`🎯 Debug: Position estimée avant joueur avec ${sameTierPlayers[i].rr}RR: #${position}`);
+                            return position;
+                        }
+                    }
+                }
+
+                // If RR is lower than all in tier, check if we'd still be in leaderboard
+                const lastPlayer = sameTierPlayers[sameTierPlayers.length - 1];
+                const worstPosition = lastPlayer.leaderboard_rank;
+
+                // If the worst player in our tier is already at the edge of leaderboard
+                if (worstPosition >= players.length - 100) { // Give some buffer
+                    console.log(`❌ Debug: RR ${targetRR} trop bas, dernier joueur tier ${targetTier} déjà en position ${worstPosition}/${players.length}`);
+                    return null; // Player not in leaderboard
+                }
+
+                const position = worstPosition + Math.max(10, (lastPlayer.rr - targetRR) * 10);
+                if (position > players.length) {
+                    console.log(`❌ Debug: Position estimée ${position} > taille leaderboard ${players.length}`);
+                    return null; // Player not in leaderboard
+                }
+
+                console.log(`🎯 Debug: Position estimée après dernier joueur (${lastPlayer.rr}RR): #${position}`);
+                return position;
+            }
+
+            // Fallback estimation if no same tier players found
+            console.log(`❌ Debug: Aucun joueur trouvé dans le tier ${targetTier}, joueur probablement hors leaderboard`);
+            return null; // Player not in leaderboard
+        }
+
+        showChangeIndicator(changeValue) {
+            if (changeValue != null) {
+                console.log('RR last_change:', changeValue);
+            }
+        }
+
+        displayError(message) {
+            console.error('❌ Erreur:', message);
+        }
+
+        /** valo/map/{name}.png — fichier local “havent” pour Haven */
+        normalizeMapFileName(name) {
+            if (!name || typeof name !== 'string') return 'ascent';
+            let s = name.toLowerCase().replace(/\s+/g, '');
+            const aliases = { haven: 'havent' };
+            return aliases[s] || s;
+        }
+
+        /** valo/agent/{name}.png (minuscules, sans caractères spéciaux) */
+        normalizeAgentFileName(name) {
+            if (!name || typeof name !== 'string') return 'jett';
+            const s = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return s || 'jett';
+        }
+
+        applyMatchHistoryToCards(entries) {
+            const track = document.getElementById('fuguHistoryTrackValo');
+            if (!track) return;
+            const cards = Array.from(track.querySelectorAll('.game-card'));
+            entries.forEach((entry, i) => {
+                if (i >= cards.length) return;
+                const card = cards[i];
+                const mapEl = card.querySelector('.game-card__map');
+                const agentEl = card.querySelector('.game-card__agent');
+                const mapPath = `valo/map/${entry.mapFile}.png`;
+                const agentPath = `valo/agent/${entry.agentFile}.png`;
+                if (mapEl) {
+                    mapEl.style.backgroundImage = `url('${mapPath}')`;
+                }
+                if (agentEl) {
+                    agentEl.src = agentPath;
+                    agentEl.style.opacity = '1';
+                    agentEl.onerror = function handleAgentImgErr() {
+                        agentEl.onerror = null;
+                        agentEl.src = 'valo/images/no-rank.png';
+                    };
+                }
+                card.classList.remove('game-card--placeholder', 'game-card--lol', 'game-card--win', 'game-card--loss');
+                card.classList.add(entry.won ? 'game-card--win' : 'game-card--loss');
+            });
+            window.__overlayFuguMatchCount = entries.length;
+            if (typeof window.overlayFuguUpdateHistoryCount === 'function') {
+                window.overlayFuguUpdateHistoryCount();
+            }
+            this._valoLastEntries = entries.map((e) => ({ ...e }));
+        }
+
+        async fetchCompetitiveMatchHistory() {
+            if (!this.puuid || this.manualMode) {
+                return false;
+            }
+            try {
+                const base = `https://api.henrikdev.xyz/valorant/v4/by-puuid/matches/${this.region}/${this.platform}/${encodeURIComponent(
+                    this.puuid
+                )}`;
+                const url = `${base}?queue=competitive&size=15&api_key=${encodeURIComponent(this.apiKey)}`;
+                console.log('🎮 Match history v4:', url.replace(this.apiKey, '***'));
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const json = await response.json();
+                if (this._gameSwitchGeneration !== this._fetchGenSnapshot) {
+                    return false;
+                }
+                const list = json && Array.isArray(json.data) ? json.data : [];
+                const pid = this.puuid.toLowerCase();
+                const entries = [];
+
+                for (const match of list) {
+                    const meta = match.metadata || {};
+                    const players = match.players || [];
+                    const me = players.find((p) => (p.puuid || '').toLowerCase() === pid);
+                    if (!me) continue;
+
+                    const teamId = me.team_id;
+                    const team = (match.teams || []).find((t) => t.team_id === teamId);
+                    const won = team ? !!team.won : false;
+                    const mapName = meta.map && meta.map.name;
+                    const agentName = me.agent && me.agent.name;
+
+                    entries.push({
+                        won,
+                        mapFile: this.normalizeMapFileName(mapName),
+                        agentFile: this.normalizeAgentFileName(agentName)
+                    });
+                    if (entries.length >= 10) break;
+                }
+
+                if (entries.length === 0) {
+                    console.log('⚠️ Aucun match competitive dans la réponse');
+                    this.clearMatchHistoryCards('valo');
+                    return true;
+                }
+
+                if (this._gameSwitchGeneration !== this._fetchGenSnapshot) {
+                    return false;
+                }
+
+                this.applyMatchHistoryToCards(entries);
+                console.log('✅ Historique competitive:', entries.length, 'parties');
+                return true;
+            } catch (err) {
+                console.error('❌ fetchCompetitiveMatchHistory:', err);
+                return false;
+            }
+        }
+
+        // Méthode pour intégrer l'API Riot Games
+        async fetchRealRankData() {
+            try {
+                if (!this.puuid) {
+                    console.warn('[overlay-fugu] Ajoutez ?puuid=VOTRE_PUUID dans l URL du navigateur source (OBS).');
+                    return false;
+                }
+                console.log('🚀 Début de fetchRealRankData...');
+                console.log('👤 PUUID:', this.puuid);
+
+                const apiUrl = `https://api.henrikdev.xyz/valorant/v3/by-puuid/mmr/${this.region}/${this.platform}/${this.puuid}?api_key=${this.apiKey}`;
+                console.log('🌐 URL API:', apiUrl);
+
+                console.log('📡 Envoi de la requête vers l\'API...');
+                const response = await fetch(apiUrl);
+
+                console.log('📋 Statut de la réponse:', response.status, response.statusText);
+                console.log('📋 Headers de la réponse:', Object.fromEntries(response.headers.entries()));
+
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP: ${response.status} - ${response.statusText}`);
+                }
+
+                console.log('📦 Parsing du JSON...');
+                const json = await response.json();
+                console.log('📄 Réponse complète de l\'API:', json);
+
+                if (this._gameSwitchGeneration !== this._fetchGenSnapshot) {
+                    return false;
+                }
+
+                if (!json.data) {
+                    console.error('❌ Pas de données dans la réponse:', json);
+                    throw new Error('Aucune donnée reçue de l\'API');
+                }
+
+                const data = json.data;
+                console.log('🎯 Données du joueur:', data);
+
+                // Update player name and tag from API response if available
+                if (data.account) {
+                    this.playerName = data.account.name;
+                    this.playerTag = data.account.tag;
+                    console.log(`👤 Nom du joueur mis à jour: ${this.playerName}#${this.playerTag}`);
+                }
+
+                // Check if player has no rank (games_needed_for_rating > 0)
+                const gamesNeededForRating = data.current.games_needed_for_rating || 0;
+                const hasNoRank = gamesNeededForRating > 0;
+
+                console.log(`🎮 Games needed for rating: ${gamesNeededForRating} (Has no rank: ${hasNoRank})`);
+
+                // Store old values for animation and comparison
+                const oldRR = this.currentRankData.rr;
+                const oldTier = this.currentRankData.tier;
+                const newRR = hasNoRank ? 0 : data.current.rr;
+                const newTier = hasNoRank ? 0 : data.current.tier.id;
+                const changeValue = data.current.last_change;
+
+                // Mettre à jour les données internes (API v3 structure)
+                this.currentRankData = {
+                    rank: hasNoRank ? 'No Rank' : data.current.tier.name,
+                    rr: newRR,
+                    tier: newTier,
+                    hasNoRank: hasNoRank
+                };
+
+                console.log('✅ Données de rang mises à jour:', this.currentRankData);
+
+                // Update rank image immediately if tier changed
+                if (oldTier !== newTier) {
+                    console.log(`🏆 Changement de rang détecté: ${oldTier} → ${newTier}`);
+                    this.updateRankImage();
+                }
+
+                // Update display with animation if RR changed
+                if (oldRR !== newRR) {
+                    console.log(`🎬 Animation RR: ${oldRR} → ${newRR} (change: ${changeValue})`);
+                    await this.animateRRChange(oldRR, newRR, changeValue);
+                } else {
+                    // Just update the display without animation
+                    this.displayCurrentRank();
+                }
+
+                // Always update the rank image to handle no-rank case
+                this.updateRankImage();
+
+                // Sauvegarder les nouvelles données
+                await this.saveRankData();
+
+                console.log('🎉 fetchRealRankData terminé avec succès!');
+                return true;
+
+            } catch (error) {
+                console.error('❌ Erreur dans fetchRealRankData:', error);
+                console.error('📊 Stack trace:', error.stack);
+                this.displayError('Erreur API');
+                return false;
+            }
+        }
+}
+
+        function overlayFuguHistorySetup() {
+            var HISTORY_MIN = 3;
+            var HISTORY_MAX = 10;
+            window.__overlayFuguMatchCount = HISTORY_MAX;
+            var TRACK_IDS = ['fuguHistoryTrackValo', 'fuguHistoryTrackLol'];
+            function updateHistoryVisibleCount() {
+                var dataCap =
+                    typeof window.__overlayFuguMatchCount === 'number' ? window.__overlayFuguMatchCount : HISTORY_MAX;
+                if (dataCap < 1) dataCap = HISTORY_MAX;
+                TRACK_IDS.forEach(function (id) {
+                    var track = document.getElementById(id);
+                    if (!track) return;
+                    var cards = track.querySelectorAll('.game-card');
+                    if (!cards.length) return;
+                    var style = getComputedStyle(track);
+                    var gap = parseFloat(style.gap) || 12;
+                    var w = track.clientWidth;
+                    var cw = cards[0].offsetWidth;
+                    if (cw <= 0 || w <= 0) return;
+                    var n = Math.floor((w + gap) / (cw + gap));
+                    n = Math.max(HISTORY_MIN, Math.min(HISTORY_MAX, dataCap, n));
+                    cards.forEach(function (el, i) {
+                        el.hidden = i >= n;
+                    });
+                    track.dataset.visibleGames = String(n);
+                });
+            }
+            var inner = document.querySelector('.fugu-inner');
+            var stack = document.querySelector('.fugu-history-stack');
+            if (typeof ResizeObserver !== 'undefined') {
+                var ro = new ResizeObserver(updateHistoryVisibleCount);
+                if (inner) ro.observe(inner);
+                if (stack) ro.observe(stack);
+                TRACK_IDS.forEach(function (tid) {
+                    var t = document.getElementById(tid);
+                    if (t) ro.observe(t);
+                });
+            } else {
+                window.addEventListener('resize', updateHistoryVisibleCount);
+            }
+            window.addEventListener('load', updateHistoryVisibleCount);
+            requestAnimationFrame(function () {
+                requestAnimationFrame(updateHistoryVisibleCount);
+            });
+            window.overlayFuguUpdateHistoryCount = updateHistoryVisibleCount;
+        }
+
+        var rankSwitchAnim = null;
+        var rrTickAnim = null;
+        function overlayFuguUseWaapi(el) {
+            return el && typeof el.animate === 'function';
+        }
+        window.testRankIconSwitch = function () {
+            var wrap = document.querySelector('.fugu-rank__icon-wrap');
+            if (!wrap) return console.warn('[overlay-fugu] .fugu-rank__icon-wrap introuvable');
+            if (rankSwitchAnim) {
+                try { rankSwitchAnim.cancel(); } catch (e) {}
+                rankSwitchAnim = null;
+            }
+            if (overlayFuguUseWaapi(wrap)) {
+                rankSwitchAnim = wrap.animate(
+                    [
+                        { opacity: 0.45, transform: 'scale(0.78) rotate(-4deg)' },
+                        { opacity: 1, transform: 'scale(1.06) rotate(1deg)', offset: 0.55 },
+                        { opacity: 1, transform: 'scale(1) rotate(0deg)' }
+                    ],
+                    { duration: 650, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+                );
+                rankSwitchAnim.onfinish = function () { rankSwitchAnim = null; };
+                return;
+            }
+            wrap.classList.remove('is-switching');
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () { wrap.classList.add('is-switching'); });
+            });
+        };
+        window.testRRTick = function (dir, nextRR) {
+            var el = document.getElementById('rrDisplay');
+            if (!el) return console.warn('[overlay-fugu] #rrDisplay introuvable');
+            if (typeof nextRR === 'number') el.textContent = nextRR + ' RR';
+            if (rrTickAnim) {
+                try { rrTickAnim.cancel(); } catch (e) {}
+                rrTickAnim = null;
+            }
+            var up = dir !== 'down';
+            if (overlayFuguUseWaapi(el)) {
+                rrTickAnim = el.animate(
+                    up
+                        ? [
+                              { transform: 'translateY(0) scale(1)', color: '#fff' },
+                              { transform: 'translateY(-12px) scale(1.15)', color: '#5cff7a', offset: 0.4 },
+                              { transform: 'translateY(0) scale(1)', color: '#fff' }
+                          ]
+                        : [
+                              { transform: 'translateY(0) scale(1)', color: '#fff' },
+                              { transform: 'translateY(12px) scale(1.15)', color: '#ff6b6b', offset: 0.4 },
+                              { transform: 'translateY(0) scale(1)', color: '#fff' }
+                          ],
+                    { duration: 550, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' }
+                );
+                rrTickAnim.onfinish = function () { rrTickAnim = null; };
+                return;
+            }
+            var cls = up ? 'is-tick-up' : 'is-tick-down';
+            el.classList.remove('is-tick-up', 'is-tick-down');
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () { el.classList.add(cls); });
+            });
+        };
+        window.testRankSwap = function (src, name) {
+            src = src || 'valo/images/Immortal_2_Rank.png';
+            name = name != null ? name : 'Immortal 2';
+            var img = document.querySelector('.fugu-rank__icon--valo');
+            var nameEl = document.querySelector('.fugu-rank__name');
+            if (!img) return;
+            img.src = src;
+            if (nameEl) nameEl.textContent = name;
+            function play() { window.testRankIconSwitch(); }
+            if (img.complete) play();
+            else img.addEventListener('load', play, { once: true });
+        };
+
+        document.addEventListener('DOMContentLoaded', async function () {
+            overlayFuguHistorySetup();
+            console.log('🚀 overlay-fugu: Widget Valorant + chat Twitch #' +
+                (new URLSearchParams(location.search).get('channel') || 'sc0rpio74890'));
+            var widget = new ValorantRankWidget();
+            window.valorantWidget = widget;
+            console.log(
+                '🔧 Mode: ' +
+                    widget.overlayMode +
+                    ' (?mode=normal | ?mode=rank | auto_game + Helix) | Tests: window.valorantWidget | testRankIconSwitch() | chat: !lol !valo'
+            );
+        });
+    </script>
+
+</body>
+</html>
