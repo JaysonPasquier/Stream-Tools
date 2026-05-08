@@ -46,19 +46,10 @@ install.bat
 create_env.bat
 ```
 
-3. Start the monitor:
+3. Start the monitor (or add it to obs script so it start on obs startup):
 
 ```bat
 python monitor.py
-```
-
-## Quick start (Linux / macOS)
-
-```bash
-python3 -m pip install -r requirements.txt
-cp .env.example .env
-# edit .env with your values
-python3 monitor.py
 ```
 
 ## API keys you need
@@ -79,12 +70,6 @@ You need these in `.env`:
 - `TWITCH_CLIENT_ID`
 - `TWITCH_ACCESS_TOKEN`
 
-Get `TWITCH_CLIENT_ID`:
-
-1. Open [https://dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps)
-2. Create an app (or open your existing app)
-3. Copy the Client ID
-
 Get `TWITCH_ACCESS_TOKEN`:
 
 1. Generate a user OAuth token
@@ -94,6 +79,29 @@ Get `TWITCH_ACCESS_TOKEN`:
 Official docs:
 
 - [https://dev.twitch.tv/docs/authentication/getting-tokens-oauth](https://dev.twitch.tv/docs/authentication/getting-tokens-oauth)
+
+## Cloudflare setup guide
+
+For a full step-by-step tutorial with screenshots, read:
+
+- [Cloudflare setup tutorial](./Cloudflare.md)
+
+## Add monitor.py to OBS
+
+You can run the monitor directly inside OBS:
+
+1. Open OBS
+2. Click **Outils** -> **Scripts**
+3. Click **+**
+4. Select `monitor.py`
+
+When loaded, the script starts automatically.
+When OBS closes or you remove the script, it stops automatically.
+
+Overlay note:
+
+- Use OBS **Browser Source** with the local HTTP URL printed in the script log
+- Do not use `file://.../overlay.html`
 
 ## Files
 
