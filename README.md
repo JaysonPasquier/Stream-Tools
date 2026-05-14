@@ -84,7 +84,7 @@ or inside OBS:
 
 ## How to get each key/value
 
-- Henrik API key (Valorant): [https://docs.henrikdev.xyz](https://api.henrikdev.xyz/dashboard/)
+- Henrik API key (Valorant): [https://api.henrikdev.xyz/dashboard](https://api.henrikdev.xyz/dashboard/)
 - Riot personal key type info: [https://developer.riotgames.com/app-type](https://developer.riotgames.com/app-type)
 - Twitch access token + client id helper: [https://twitchtokengenerator.com](https://twitchtokengenerator.com)
 - Cloudflare worker + KV setup: [Cloudflare.md](./Cloudflare.md)
