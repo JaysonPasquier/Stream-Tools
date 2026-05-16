@@ -84,10 +84,14 @@ Keep this value: you will put the same token in `create_env.bat` when asked for 
 
 ## 6) Copy base URL and run create_env.bat
 
+For the Cloudflare base URL, open your worker, go to the **Preview** tab, and copy the URL from the address bar — the same place shown in this screenshot (use **your** URL, not the example in the image):
+
+![Where to find your worker base URL on the Preview tab](cloudflare-image/image-15.png)
+
 You need:
-- `CF_WORKER_BASE_URL` = your worker URL without extra path  
+- `CF_WORKER_BASE_URL` = that URL **without** a path at the end  
   Example: `https://stream-tools-worker.<subdomain>.workers.dev`
-- `CF_UPDATE_TOKEN` = the exact `UPDATE_TOKEN` secret value
+- `CF_UPDATE_TOKEN` = the exact `UPDATE_TOKEN` secret value from step 4
 
 Then run:
 - `create_env.bat`

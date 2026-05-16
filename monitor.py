@@ -11,6 +11,8 @@ separate rank and streak scripts.
 """
 
 import os
+import sys
+import subprocess
 import time
 import threading
 import posixpath
@@ -19,6 +21,36 @@ import socketserver
 from datetime import datetime, timezone
 from typing import List, Optional, Set, Tuple
 from urllib.parse import quote
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def ensure_dependencies() -> None:
+    """Install requirements.txt packages if missing (uses current Python executable)."""
+    missing = []
+    try:
+        import requests  # noqa: F401
+    except ImportError:
+        missing.append("requests")
+    try:
+        import dotenv  # noqa: F401
+    except ImportError:
+        missing.append("python-dotenv")
+
+    if not missing:
+        return
+
+    req_file = os.path.join(SCRIPT_DIR, "requirements.txt")
+    if not os.path.isfile(req_file):
+        print("[Setup] requirements.txt not found, cannot auto-install dependencies.")
+        raise ImportError("Missing packages: {0}".format(", ".join(missing)))
+
+    print("[Setup] Installing missing packages: {0}".format(", ".join(missing)))
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "-r", req_file])
+    print("[Setup] Dependencies installed.")
+
+
+ensure_dependencies()
 
 import requests
 try:
@@ -30,8 +62,6 @@ try:
     from dotenv import load_dotenv
 except ImportError:
     load_dotenv = None
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ENV_CANDIDATES = [
     os.path.join(SCRIPT_DIR, ".env"),
     os.path.join(os.getcwd(), ".env"),
@@ -132,6 +162,14 @@ CF_UPDATE_TOKEN = os.environ.get("CF_UPDATE_TOKEN", "").strip()
 
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "20"))
 TEST_MODE = os.environ.get("TEST_MODE", "false").lower() == "true"
+
+
+def valorant_configured() -> bool:
+    return bool(VAL_PUUID and HENRIK_API_KEY)
+
+
+def lol_configured() -> bool:
+    return bool(LOL_PUUID and RIOT_API_KEY)
 OVERLAY_SERVER_ENABLED = os.environ.get("OVERLAY_SERVER_ENABLED", "true").lower() == "true"
 OVERLAY_SERVER_HOST = os.environ.get("OVERLAY_SERVER_HOST", "127.0.0.1").strip()
 OVERLAY_SERVER_PORT = int(os.environ.get("OVERLAY_SERVER_PORT", "8787"))
@@ -184,6 +222,7 @@ class RuntimeState:
         self.current_game = None  # type: Optional[str]
         self.last_rank_pushed = None  # type: Optional[str]
         self.last_session_pushed = None  # type: Optional[str]
+        self.skip_logged_for = None  # type: Optional[str]
         self.val = ValorantSession()
         self.lol = LolSession()
 
@@ -669,6 +708,12 @@ def main_loop(stop_event: Optional[threading.Event] = None) -> None:
 
     log_info("[Main] Unified monitor started.")
     log_info(f"[Main] Poll interval: {POLL_INTERVAL_SECONDS}s")
+    log_info(
+        "[Config] Valorant: {0}".format("enabled" if valorant_configured() else "disabled (not configured)")
+    )
+    log_info(
+        "[Config] LoL: {0}".format("enabled" if lol_configured() else "disabled (not configured)")
+    )
     if CF_WORKER_BASE_URL:
         log_info(f"[Cloudflare] update={base_update_url()}")
         log_info(f"[Cloudflare] rank={base_rank_url()}")
@@ -701,6 +746,7 @@ def main_loop(stop_event: Optional[threading.Event] = None) -> None:
                 STATE.current_game = None
                 STATE.last_rank_pushed = None
                 STATE.last_session_pushed = None
+                STATE.skip_logged_for = None
                 if stop_event and stop_event.wait(POLL_INTERVAL_SECONDS):
                     break
                 continue
@@ -718,8 +764,28 @@ def main_loop(stop_event: Optional[threading.Event] = None) -> None:
                 reset_session(game)
 
             if game == "VALORANT":
+                if not valorant_configured():
+                    if STATE.skip_logged_for != "VALORANT":
+                        log_info(
+                            "[Valorant] Skipped: not configured in .env "
+                            "(set VAL_PUUID and HENRIK_API_KEY)."
+                        )
+                        STATE.skip_logged_for = "VALORANT"
+                    if stop_event and stop_event.wait(POLL_INTERVAL_SECONDS):
+                        break
+                    continue
                 rank_text, session_text = process_valorant()
             elif game == "LOL":
+                if not lol_configured():
+                    if STATE.skip_logged_for != "LOL":
+                        log_info(
+                            "[LoL] Skipped: not configured in .env "
+                            "(set LOL_PUUID and RIOT_API_KEY)."
+                        )
+                        STATE.skip_logged_for = "LOL"
+                    if stop_event and stop_event.wait(POLL_INTERVAL_SECONDS):
+                        break
+                    continue
                 rank_text, session_text = process_lol()
             else:
                 log_info(f"[Twitch] Unsupported category '{game_name}', skipping update.")
@@ -727,6 +793,7 @@ def main_loop(stop_event: Optional[threading.Event] = None) -> None:
                     break
                 continue
 
+            STATE.skip_logged_for = None
             rank_changed = rank_text != STATE.last_rank_pushed
             session_changed = session_text != STATE.last_session_pushed
 
