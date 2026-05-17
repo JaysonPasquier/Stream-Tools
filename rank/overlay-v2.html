@@ -432,7 +432,7 @@
         .fugu-v2-stat__label,
         .fugu-v2-col__label {
             width: 100%;
-            font-size: clamp(10px, 18cqw, 24px);
+            font-size: clamp(11px, 20cqw, 28px);
             letter-spacing: 0.04em;
             text-transform: uppercase;
             color: rgba(255, 255, 255, 0.72);
@@ -444,7 +444,7 @@
         .fugu-v2-col__value,
         .fugu-v2-stats-col--rank .fugu-rank__rr {
             width: 100%;
-            font-size: clamp(14px, 22cqw, 40px);
+            font-size: clamp(15px, 24cqw, 44px);
             font-weight: bold;
             line-height: 1.1;
             color: #fff;
@@ -1037,6 +1037,53 @@
                 meta.start_time ||
                 meta.match_start;
             return this.parseTimestampMs(raw);
+        }
+
+        /** Ranked only — Henrik ?queue=competitive can still return other modes in some cases. */
+        isValorantCompetitiveMatch(match) {
+            const meta = (match && match.metadata) || {};
+            const queue = meta.queue || {};
+            const parts = [
+                queue.id,
+                queue.type,
+                queue.mode_type,
+                queue.name,
+                meta.queue_id,
+                meta.mode,
+                meta.mode_id,
+                meta.match_type
+            ]
+                .filter((v) => v != null && String(v).trim() !== '')
+                .map((v) => String(v).toLowerCase());
+
+            if (!parts.length) {
+                return false;
+            }
+
+            const ranked = new Set(['competitive', 'ranked']);
+            const excluded = [
+                'unrated',
+                'swiftplay',
+                'spikerush',
+                'deathmatch',
+                'ggteam',
+                'onefa',
+                'hurm',
+                'custom',
+                'newmap',
+                'new_map',
+                'tutorial',
+                'practice',
+                'casual'
+            ];
+
+            if (parts.some((p) => ranked.has(p) || p.includes('competitive') || p.includes('ranked'))) {
+                return true;
+            }
+            if (parts.some((p) => excluded.some((x) => p.includes(x)))) {
+                return false;
+            }
+            return false;
         }
 
         parseLolMatchStartMs(match) {
@@ -3172,8 +3219,12 @@
                 const base = `https://api.henrikdev.xyz/valorant/v4/by-puuid/matches/${this.region}/${this.platform}/${encodeURIComponent(
                     this.puuid
                 )}`;
-                const url = `${base}?queue=competitive&size=${this.valoMatchListCount}&api_key=${encodeURIComponent(this.apiKey)}`;
-                console.log('🎮 Match history v4:', url.replace(this.apiKey, '***'));
+                const fetchSize = Math.min(
+                    50,
+                    Math.max(this.valoMatchListCount, this.valoMatchListCount * 4)
+                );
+                const url = `${base}?queue=competitive&size=${fetchSize}&api_key=${encodeURIComponent(this.apiKey)}`;
+                console.log('🎮 Match history v4 (ranked only):', url.replace(this.apiKey, '***'));
                 const response = await fetch(url);
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
@@ -3187,6 +3238,9 @@
                 const entries = [];
 
                 for (const match of list) {
+                    if (!this.isValorantCompetitiveMatch(match)) {
+                        continue;
+                    }
                     const meta = match.metadata || {};
                     const players = match.players || [];
                     const me = players.find((p) => (p.puuid || '').toLowerCase() === pid);
@@ -3204,6 +3258,9 @@
                         agentFile: this.normalizeAgentFileName(agentName),
                         startedAtMs: this.parseValoMatchStartMs(match)
                     });
+                    if (entries.length >= this.valoMatchListCount) {
+                        break;
+                    }
                 }
 
                 if (entries.length === 0) {
